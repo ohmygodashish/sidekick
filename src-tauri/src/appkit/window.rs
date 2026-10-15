@@ -90,6 +90,39 @@ pub fn configure_tauri_window<R: tauri::Runtime>(
 }
 
 #[cfg(not(target_os = "macos"))]
+pub fn configure_tauri_window<R: tauri::Runtime>(
+    _window: &tauri::WebviewWindow<R>,
+) -> Result<(), tauri::Error> {
+    Ok(())
+}
+
+/// Sets the native macOS window opacity / alpha value.
+///
+/// `alpha` is clamped between 0.0 (completely transparent) and 1.0 (fully opaque).
+#[cfg(target_os = "macos")]
+pub fn set_window_opacity<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    alpha: f64,
+) -> Result<(), tauri::Error> {
+    let ns_window = window.ns_window()? as id;
+    if !ns_window.is_null() {
+        let clamped = alpha.clamp(0.0, 1.0);
+        unsafe {
+            ns_window.setAlphaValue_(clamped as cocoa::appkit::CGFloat);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_window_opacity<R: tauri::Runtime>(
+    _window: &tauri::WebviewWindow<R>,
+    _alpha: f64,
+) -> Result<(), tauri::Error> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn configure_stealth_window(_ns_window: *mut std::ffi::c_void) {}
 
 #[cfg(test)]

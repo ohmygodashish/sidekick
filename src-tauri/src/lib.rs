@@ -1,6 +1,7 @@
 //! Sidekick Core Library
 
 pub mod appkit;
+pub mod hotkeys;
 
 use tauri::Manager;
 
@@ -10,28 +11,50 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+use hotkeys::commands::*;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let hotkey_plugin = tauri_plugin_global_shortcut::Builder::new()
+        .with_shortcuts([
+            hotkeys::SHORTCUT_PANIC,
+            hotkeys::SHORTCUT_TOGGLE_VISIBILITY,
+            hotkeys::SHORTCUT_TOGGLE_CLICK_THROUGH,
+            hotkeys::SHORTCUT_TOGGLE_LAYOUT_MODE,
+        ])
+        .expect("failed to configure default global shortcuts")
+        .with_handler(|app, shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                hotkeys::handle_shortcut(app, shortcut);
+            }
+        })
+        .build();
+
     tauri::Builder::default()
+        .manage(hotkeys::HotkeyState::default())
+        .plugin(hotkey_plugin)
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
                 // 1. Configure headless phantom accessory policy (zero Dock icon, excluded from Cmd+Tab, zero tray)
                 appkit::configure_accessory_policy();
 
-                // 2. Configure stealth overlay on the main window
+                // 2. Configure stealth overlay on the main window (Task 2 cleanup: safe wrapper)
                 if let Some(main_window) = app.get_webview_window("main") {
-                    #[allow(deprecated)]
-                    let ns_window = main_window
-                        .ns_window()
-                        .expect("failed to obtain native NSWindow handle") as cocoa::base::id;
-                    appkit::configure_stealth_window(ns_window);
+                    appkit::configure_tauri_window(&main_window)?;
                 }
             }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            set_click_through,
+            trigger_panic,
+            set_window_opacity,
+            set_layout_mode,
+            get_hotkey_state,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
