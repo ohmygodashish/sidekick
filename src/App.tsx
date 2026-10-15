@@ -5,6 +5,7 @@ import { NotchCompanion } from "./components/hud/NotchCompanion";
 import { SettingsDrawer } from "./components/settings/SettingsDrawer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
+import { setSttEngine } from "./lib/ipc";
 import { cn } from "./lib/utils";
 
 export default function App() {
@@ -16,6 +17,10 @@ export default function App() {
     // 1. Initial state synchronization with Tauri backend
     syncFromBackend();
     useSettingsStore.getState().loadApiKeysFromBackend();
+
+    // Synchronize persisted STT mode to native backend (Task 10 review fix)
+    const sttMode = useSettingsStore.getState().sttMode;
+    setSttEngine(sttMode);
 
     // 2. Setup hotkey and window event listeners
     let cleanupFn: (() => void) | undefined;

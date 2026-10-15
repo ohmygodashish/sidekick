@@ -19,9 +19,15 @@
 //!   "is_final": true
 //! }
 //! ```
+//!
+//! Decoupled from real-time audio threads via bounded non-blocking queues (`AsyncSttWorker`).
 
+use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, RwLock};
+use std::thread::{self, JoinHandle};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -205,6 +211,11 @@ impl SttDispatcher {
         &self.local_whisper
     }
 
+    /// Reloads model weights into the local Whisper engine
+    pub fn reload_whisper_model(&self, model_name: &str) -> Result<PathBuf, String> {
+        self.local_whisper.load_model(model_name)
+    }
+
     /// Transcribes an audio chunk using the active STT engine and returns the SttChunk payload.
     /// In offline mode or when cloud credentials are unconfigured, automatically falls back
     /// to local whisper to guarantee zero dropped candidate/interviewer speech turns (AC-005).
@@ -283,6 +294,72 @@ impl SttDispatcher {
         self.local_whisper
             .transcribe(&chunk.samples, chunk.sample_rate)
             .map(|r| r.text)
+    }
+}
+
+/// Item passed through the asynchronous STT worker queue
+pub struct SttQueueItem {
+    pub chunk: AudioChunk,
+    pub emit_fn: Box<dyn FnOnce(&SttChunk) + Send>,
+}
+
+/// Background worker running STT inference asynchronously to ensure
+/// zero blocking on real-time ScreenCaptureKit and CoreAudio capture threads (Review Round 1 Fix)
+pub struct AsyncSttWorker {
+    sender: SyncSender<SttQueueItem>,
+    is_panicked: Arc<AtomicBool>,
+    _worker_thread: Option<JoinHandle<()>>,
+}
+
+impl AsyncSttWorker {
+    pub fn new(dispatcher: Arc<SttDispatcher>, is_panicked: Arc<AtomicBool>) -> Self {
+        let (sender, receiver) = sync_channel::<SttQueueItem>(32);
+        let panicked_clone = is_panicked.clone();
+
+        let handle = thread::Builder::new()
+            .name("sidekick-stt-worker".to_string())
+            .spawn(move || {
+                while let Ok(item) = receiver.recv() {
+                    if panicked_clone.load(Ordering::SeqCst) {
+                        // Immediately drain without executing during panic purge
+                        continue;
+                    }
+                    if let Ok(stt_chunk) = dispatcher.transcribe_chunk(&item.chunk) {
+                        if !stt_chunk.text.trim().is_empty() && !panicked_clone.load(Ordering::SeqCst) {
+                            (item.emit_fn)(&stt_chunk);
+                        }
+                    }
+                }
+            })
+            .ok();
+
+        Self {
+            sender,
+            is_panicked,
+            _worker_thread: handle,
+        }
+    }
+
+    /// Non-blocking enqueue from audio callback threads. Returns immediately (< 0.01ms).
+    pub fn try_enqueue<F>(&self, chunk: AudioChunk, emit_fn: F) -> bool
+    where
+        F: FnOnce(&SttChunk) + Send + 'static,
+    {
+        if self.is_panicked.load(Ordering::SeqCst) {
+            return false;
+        }
+
+        match self.sender.try_send(SttQueueItem {
+            chunk,
+            emit_fn: Box::new(emit_fn),
+        }) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                eprintln!("[Sidekick STT] Worker queue full (32 turns buffered); dropping turn to maintain real-time audio capture");
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
     }
 }
 
@@ -417,5 +494,47 @@ mod tests {
         assert!(json.contains("\"text\":\"Hello world\""));
         assert!(json.contains("\"timestamp\":1729000000000"));
         assert!(json.contains("\"is_final\":true"));
+    }
+
+    #[test]
+    fn test_async_stt_worker_enqueue_and_drain() {
+        let dispatcher = Arc::new(SttDispatcher::new_mock(Some("Async processing test")));
+        let is_panicked = Arc::new(AtomicBool::new(false));
+        let worker = AsyncSttWorker::new(dispatcher, is_panicked.clone());
+
+        let chunk = AudioChunk {
+            channel: Channel::Interviewer,
+            samples: vec![0.1f32; 16000],
+            sample_rate: 16000,
+            timestamp_ms: 1729000000000,
+            duration_secs: 1.0,
+            rms_energy: 0.1,
+            is_speech: true,
+        };
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let enqueued = worker.try_enqueue(chunk, move |stt_chunk| {
+            let _ = done_tx.send(stt_chunk.clone());
+        });
+        assert!(enqueued, "Chunk should be successfully enqueued to worker");
+
+        let received = done_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .expect("Worker processed turn");
+        assert_eq!(received.text, "Async processing test");
+
+        // When panicked, enqueue is rejected immediately
+        is_panicked.store(true, Ordering::SeqCst);
+        let chunk2 = AudioChunk {
+            channel: Channel::Candidate,
+            samples: vec![0.1f32; 16000],
+            sample_rate: 16000,
+            timestamp_ms: 1729000001000,
+            duration_secs: 1.0,
+            rms_energy: 0.1,
+            is_speech: true,
+        };
+        let rejected = worker.try_enqueue(chunk2, |_| {});
+        assert!(!rejected, "Must reject turns immediately during panic");
     }
 }

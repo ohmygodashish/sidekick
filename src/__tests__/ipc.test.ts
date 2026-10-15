@@ -69,4 +69,10 @@ describe("IPC Helper Library", () => {
     const result = await listLocalSttModels();
     expect(result).toBeNull();
   });
+
+  it("handles downloadSttModel fallback gracefully outside Tauri", async () => {
+    const { downloadSttModel } = await import("../lib/ipc");
+    const result = await downloadSttModel("tiny.en");
+    expect(result).toBeNull();
+  });
 });

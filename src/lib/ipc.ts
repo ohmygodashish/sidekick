@@ -163,3 +163,10 @@ export async function listLocalSttModels(): Promise<ModelAssetInfo[] | null> {
   return await safeInvoke<ModelAssetInfo[]>("list_local_stt_models");
 }
 
+/**
+ * Downloads a local STT model asset directly into Application Support.
+ */
+export async function downloadSttModel(modelName: string): Promise<string | null> {
+  return await safeInvoke<string>("download_stt_model", { modelName });
+}
+

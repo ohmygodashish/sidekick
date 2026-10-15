@@ -91,6 +91,7 @@ pub fn run() {
             set_stt_engine,
             get_stt_engine,
             list_local_stt_models,
+            download_stt_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

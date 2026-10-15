@@ -7,6 +7,7 @@
 //! - Ephemeral in-memory ring buffering with zero disk persistence (SEC-003).
 //! - Embedded Local Whisper engine (`whisper.rs`) with Apple Metal GPU acceleration (AC-005).
 //! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local`, `groq`, or `deepgram`.
+//! - Asynchronous decoupled worker thread (`AsyncSttWorker`) ensuring ZERO audio callback thread blocking.
 //! - Sub-millisecond panic killswitch halt and buffer purge < 25ms (REQ-004).
 
 pub mod mic_audio;
@@ -15,6 +16,7 @@ pub mod sck_audio;
 pub mod stt_dispatcher;
 pub mod whisper;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
@@ -27,11 +29,11 @@ pub use mixer::{
 };
 pub use sck_audio::SckAudioCapture;
 pub use stt_dispatcher::{
-    channel_to_speaker, generate_turn_id, SttChunk, SttDispatcher, SttEngineType,
+    channel_to_speaker, generate_turn_id, AsyncSttWorker, SttChunk, SttDispatcher, SttEngineType,
     EVENT_STT_CHUNK, EVENT_STT_ENGINE_CHANGED,
 };
 pub use whisper::{
-    get_models_dir, is_metal_supported, list_available_models, resolve_model_path,
+    download_model, get_models_dir, is_metal_supported, list_available_models, resolve_model_path,
     LocalWhisperEngine, ModelAssetInfo, TranscriptionResult, WhisperConfig, WhisperEngine,
 };
 
@@ -39,6 +41,8 @@ pub use whisper::{
 pub const EVENT_AUDIO_TURN_COMPLETED: &str = "sidekick://audio_turn_completed";
 pub const EVENT_AUDIO_STATUS_CHANGED: &str = "sidekick://audio_status_changed";
 pub const EVENT_AUDIO_LEVEL: &str = "sidekick://audio_level";
+pub const EVENT_STT_MODEL_DOWNLOAD_PROGRESS: &str = "sidekick://stt_model_download_progress";
+pub const EVENT_STT_MODEL_DOWNLOAD_COMPLETED: &str = "sidekick://stt_model_download_completed";
 
 /// Configuration for starting audio capture
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,19 +84,25 @@ pub struct AudioState {
     sck_stream: Arc<Mutex<Option<SckAudioCapture>>>,
     mic_stream: Arc<Mutex<Option<MicAudioCapture>>>,
     dispatcher: Arc<SttDispatcher>,
+    worker: Arc<AsyncSttWorker>,
     is_capturing: AtomicBool,
-    is_panicked: AtomicBool,
+    is_panicked: Arc<AtomicBool>,
 }
 
 impl Default for AudioState {
     fn default() -> Self {
+        let is_panicked = Arc::new(AtomicBool::new(false));
+        let dispatcher = Arc::new(SttDispatcher::default());
+        let worker = Arc::new(AsyncSttWorker::new(dispatcher.clone(), is_panicked.clone()));
+
         Self {
             mixer: Arc::new(Mutex::new(AudioMixer::default())),
             sck_stream: Arc::new(Mutex::new(None)),
             mic_stream: Arc::new(Mutex::new(None)),
-            dispatcher: Arc::new(SttDispatcher::default()),
+            dispatcher,
+            worker,
             is_capturing: AtomicBool::new(false),
-            is_panicked: AtomicBool::new(false),
+            is_panicked,
         }
     }
 }
@@ -100,19 +110,28 @@ impl Default for AudioState {
 impl AudioState {
     /// Creates a state with a custom STT dispatcher (useful for tests)
     pub fn with_dispatcher(dispatcher: Arc<SttDispatcher>) -> Self {
+        let is_panicked = Arc::new(AtomicBool::new(false));
+        let worker = Arc::new(AsyncSttWorker::new(dispatcher.clone(), is_panicked.clone()));
+
         Self {
             mixer: Arc::new(Mutex::new(AudioMixer::default())),
             sck_stream: Arc::new(Mutex::new(None)),
             mic_stream: Arc::new(Mutex::new(None)),
             dispatcher,
+            worker,
             is_capturing: AtomicBool::new(false),
-            is_panicked: AtomicBool::new(false),
+            is_panicked,
         }
     }
 
     /// Access the underlying STT dispatcher
     pub fn dispatcher(&self) -> &Arc<SttDispatcher> {
         &self.dispatcher
+    }
+
+    /// Reloads model weights into the embedded Whisper engine
+    pub fn reload_whisper_model(&self, model_name: &str) -> Result<PathBuf, String> {
+        self.dispatcher.reload_whisper_model(model_name)
     }
 
     /// Takes an atomic snapshot of current audio engine state
@@ -167,19 +186,23 @@ impl AudioState {
         if config.capture_interviewer {
             let mixer_clone = self.mixer.clone();
             let app_handle = app.clone();
-            let dispatcher = self.dispatcher.clone();
+            let worker = self.worker.clone();
 
             match SckAudioCapture::start(TARGET_SAMPLE_RATE, move |samples, sample_rate, channels| {
-                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events and running STT inference
+                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events
                 let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
                     mixer.process_samples(Channel::Interviewer, samples, sample_rate, channels)
                 } else {
                     None
                 };
 
+                // Task 10 Review Fix: Decouple STT from real-time audio threads via bounded async queue
                 if let Some(chunk) = maybe_chunk {
                     let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    dispatcher.dispatch_chunk(&chunk, &app_handle);
+                    let app_handle_for_stt = app_handle.clone();
+                    worker.try_enqueue(chunk, move |stt_chunk| {
+                        let _ = app_handle_for_stt.emit(EVENT_STT_CHUNK, stt_chunk);
+                    });
                 }
             }) {
                 Ok(sck) => {
@@ -202,19 +225,23 @@ impl AudioState {
         if config.capture_candidate {
             let mixer_clone = self.mixer.clone();
             let app_handle = app.clone();
-            let dispatcher = self.dispatcher.clone();
+            let worker = self.worker.clone();
 
             match MicAudioCapture::start(move |samples, sample_rate, channels| {
-                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events and running STT inference
+                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events
                 let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
                     mixer.process_samples(Channel::Candidate, samples, sample_rate, channels)
                 } else {
                     None
                 };
 
+                // Task 10 Review Fix: Decouple STT from real-time audio threads via bounded async queue
                 if let Some(chunk) = maybe_chunk {
                     let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    dispatcher.dispatch_chunk(&chunk, &app_handle);
+                    let app_handle_for_stt = app_handle.clone();
+                    worker.try_enqueue(chunk, move |stt_chunk| {
+                        let _ = app_handle_for_stt.emit(EVENT_STT_CHUNK, stt_chunk);
+                    });
                 }
             }) {
                 Ok(mic) => {
@@ -375,6 +402,35 @@ pub mod commands {
     #[tauri::command]
     pub fn list_local_stt_models() -> Result<Vec<ModelAssetInfo>, String> {
         Ok(list_available_models())
+    }
+
+    /// Downloads a local STT model asset directly into Application Support models directory
+    #[tauri::command]
+    pub async fn download_stt_model(
+        app: AppHandle,
+        state: State<'_, AudioState>,
+        model_name: String,
+    ) -> Result<String, String> {
+        let app_handle = app.clone();
+        let model_key = model_name.clone();
+
+        let path = whisper::download_model(&model_name, Some(move |downloaded, total| {
+            let _ = app_handle.emit(EVENT_STT_MODEL_DOWNLOAD_PROGRESS, serde_json::json!({
+                "model": model_key,
+                "downloaded_bytes": downloaded,
+                "total_bytes": total,
+            }));
+        })).await?;
+
+        // Attempt loading the newly downloaded model weights
+        let _ = state.reload_whisper_model(&model_name);
+
+        let _ = app.emit(EVENT_STT_MODEL_DOWNLOAD_COMPLETED, serde_json::json!({
+            "model": model_name,
+            "path": path.to_string_lossy(),
+        }));
+
+        Ok(path.to_string_lossy().to_string())
     }
 }
 
