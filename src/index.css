@@ -13,3 +13,90 @@ body,
   user-select: none;
   -webkit-user-select: none;
 }
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply text-zinc-100 antialiased;
+  }
+}
+
+/*
+ * Sidekick UI tokens. Every component uses these instead of picking its own values.
+ * Radii are concentric: bar rounded-full/p-1 -> pill buttons; menu rounded-xl/p-1 -> items rounded-lg;
+ * panel rounded-[20px]/p-3 -> inner blocks rounded-lg (20 = 8 + 12).
+ * Text: 14px body, 13px controls, 12px meta, 11px key caps. Colours: zinc text, sky = action/focus,
+ * red = recording/danger, emerald = success. No looping animations except a spinner while working.
+ */
+@layer components {
+  .sk-surface {
+    @apply bg-zinc-900/90 text-zinc-100 shadow-[0_4px_16px_rgba(0,0,0,0.3)] ring-1 ring-inset ring-white/10;
+  }
+  .sk-bar {
+    @apply sk-surface flex items-center gap-0.5 rounded-full p-1;
+  }
+  .sk-panel {
+    @apply sk-surface flex flex-col rounded-[20px];
+  }
+  .sk-menu {
+    @apply sk-surface rounded-xl p-1;
+  }
+
+  /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
+  .sk-btn {
+    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-zinc-200 outline-none transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-sky-400/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .sk-icon-btn {
+    @apply sk-btn w-8 justify-center px-0;
+  }
+  .sk-kbd {
+    @apply rounded-[5px] bg-white/10 px-1.5 text-[11px] font-medium leading-4 text-zinc-400 tabular-nums;
+  }
+  .sk-sep {
+    @apply mx-0.5 h-4 w-px shrink-0 bg-white/10;
+  }
+
+  /* Menu */
+  .sk-menu-item {
+    @apply flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] text-zinc-200 outline-none transition-colors duration-150 hover:bg-white/10 focus-visible:bg-white/10;
+  }
+
+  /* Panel internals */
+  .sk-row {
+    @apply flex w-full items-center gap-2 rounded-lg bg-white/[0.04] px-3 py-2 text-left text-[13px] text-zinc-300 outline-none transition-colors duration-150 hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-sky-400/70;
+  }
+  .sk-field {
+    @apply w-full rounded-lg bg-white/[0.06] px-3 py-2 text-[13px] text-zinc-100 outline-none ring-1 ring-inset ring-transparent transition-shadow duration-150 placeholder:text-zinc-500 focus:ring-sky-400/60;
+  }
+  .sk-btn-primary {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-sky-500 px-3 text-[13px] font-medium text-white outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .sk-btn-secondary {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-white/[0.08] px-3 text-[13px] font-medium text-zinc-100 outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-white/[0.12] focus-visible:ring-2 focus-visible:ring-sky-400/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .sk-btn-danger {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-red-500/90 px-3 text-[13px] font-medium text-white outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-red-500 focus-visible:ring-2 focus-visible:ring-red-300/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  /* Text roles */
+  .sk-title {
+    @apply text-[14px] font-semibold text-zinc-100;
+  }
+  .sk-body {
+    @apply text-[14px] leading-relaxed text-zinc-100;
+  }
+  .sk-label {
+    @apply text-[12px] font-medium text-zinc-300;
+  }
+  .sk-meta {
+    @apply text-[12px] text-zinc-400;
+  }
+
+  /* One thin dark scrollbar for every scroll area */
+  .sk-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+  }
+}

@@ -1,34 +1,29 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { OpacityControl } from "../components/hud/OpacityControl";
 import { useAppStore } from "../store/appStore";
 
 describe("OpacityControl", () => {
+  const setOpacity = vi.fn();
+
   beforeEach(() => {
-    useAppStore.setState({ opacity: 0.85 });
+    setOpacity.mockClear();
+    useAppStore.setState({ opacity: 0.85, setOpacity });
   });
 
-  it("renders with initial 85% opacity label", () => {
+  it("shows the store opacity as a percentage slider value", () => {
     render(<OpacityControl />);
-    expect(screen.getByText("85%")).toBeDefined();
-    const slider = screen.getByLabelText("Window Opacity") as HTMLInputElement;
-    expect(slider.value).toBe("0.85");
+
+    const slider = screen.getByRole("slider") as HTMLInputElement;
+    expect(slider.value).toBe("85");
+    expect(slider.min).toBe("15");
+    expect(slider.max).toBe("100");
   });
 
-  it("updates store opacity when slider changes", () => {
+  it("calls setOpacity with value / 100 when the slider changes", () => {
     render(<OpacityControl />);
-    const slider = screen.getByLabelText("Window Opacity");
 
-    fireEvent.change(slider, { target: { value: "0.5" } });
-    expect(useAppStore.getState().opacity).toBe(0.5);
-    expect(screen.getByText("50%")).toBeDefined();
-  });
-
-  it("renders in compact mode without 'Alpha' text label", () => {
-    const { rerender } = render(<OpacityControl compact={false} />);
-    expect(screen.getByText("Alpha")).toBeDefined();
-
-    rerender(<OpacityControl compact={true} />);
-    expect(screen.queryByText("Alpha")).toBeNull();
+    fireEvent.change(screen.getByRole("slider"), { target: { value: "50" } });
+    expect(setOpacity).toHaveBeenCalledWith(0.5);
   });
 });

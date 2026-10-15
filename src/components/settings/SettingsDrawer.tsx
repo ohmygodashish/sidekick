@@ -1,20 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  X,
-  Key,
+  AudioLines,
+  KeyRound,
+  LoaderCircle,
+  TriangleAlert,
   User,
-  Mic,
-  AlertTriangle,
-  Flame,
-  RotateCcw,
-  CheckCircle2,
-  Shield,
-  Radio,
-  Cpu,
-  Download,
-  Loader2,
+  X,
+  type LucideIcon,
 } from "lucide-react";
-import { useSettingsStore } from "../../store/settingsStore";
+import { useSettingsStore, type SttMode } from "../../store/settingsStore";
 import { useSessionStore } from "../../store/sessionStore";
 import {
   safeInvoke,
@@ -34,6 +28,24 @@ interface SettingsDrawerProps {
   defaultTab?: SettingsTab;
 }
 
+const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
+  { id: "keys", label: "Keys", icon: KeyRound },
+  { id: "profile", label: "Profile", icon: User },
+  { id: "audio", label: "Audio", icon: AudioLines },
+  { id: "danger", label: "Danger", icon: TriangleAlert },
+];
+
+const STT_OPTIONS: { id: SttMode; name: string; description: string }[] = [
+  { id: "whisper_local", name: "On this Mac", description: "Runs offline. Audio stays on this device." },
+  { id: "groq", name: "Groq cloud", description: "Fast cloud transcription. Needs a Groq key." },
+  { id: "deepgram", name: "Deepgram streaming", description: "Live cloud streaming. Needs a Deepgram key." },
+];
+
+const CONFIRM_MS = 3000;
+const CONFIRMED_MS = 2000;
+
+type DangerAction = "burn" | "reset";
+
 export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   isOpen: propsIsOpen,
   onClose: propsOnClose,
@@ -44,45 +56,35 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const resetSettings = useSettingsStore((s) => s.resetSettings);
   const sttMode = useSettingsStore((s) => s.sttMode);
   const setSttMode = useSettingsStore((s) => s.setSttMode);
-
+  const apiKeys = useSettingsStore((s) => s.apiKeys);
   const clearSession = useSessionStore((s) => s.clearSession);
 
   const isOpen = propsIsOpen !== undefined ? propsIsOpen : storeIsOpen;
   const handleClose = propsOnClose || (() => setIsSettingsOpen(false));
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab);
-  const [burnFeedback, setBurnFeedback] = useState<string | null>(null);
-  const [resetFeedback, setResetFeedback] = useState<string | null>(null);
+  const tabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
+
   const [localModels, setLocalModels] = useState<ModelAssetInfo[]>([]);
-  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [modelNotice, setModelNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Fetch local models status when drawer is opened or activeTab is audio
-  useEffect(() => {
-    if (!isOpen) return;
-    listLocalSttModels().then((models) => {
-      if (models) setLocalModels(models);
-    });
-  }, [isOpen, activeTab]);
+  const [armed, setArmed] = useState<DangerAction | null>(null);
+  const [done, setDone] = useState<DangerAction | null>(null);
+  const armTimer = useRef<number | undefined>(undefined);
+  const doneTimer = useRef<number | undefined>(undefined);
+  const noticeTimer = useRef<number | undefined>(undefined);
 
-  const handleDownloadTiny = async () => {
-    setDownloadingModel("tiny");
-    setDownloadProgress("Downloading ggml-tiny.en.bin (~75 MB)...");
-    try {
-      await downloadSttModel("tiny");
-      setDownloadProgress("Model downloaded & loaded with Apple Metal GPU!");
-      const updated = await listLocalSttModels();
-      if (updated) setLocalModels(updated);
-      setTimeout(() => setDownloadProgress(null), 3500);
-    } catch (err) {
-      setDownloadProgress("Failed to download model. Check internet connection.");
-      setTimeout(() => setDownloadProgress(null), 4000);
-    } finally {
-      setDownloadingModel(null);
-    }
-  };
+  useEffect(
+    () => () => {
+      window.clearTimeout(armTimer.current);
+      window.clearTimeout(doneTimer.current);
+      window.clearTimeout(noticeTimer.current);
+    },
+    []
+  );
 
-  // Escape key to dismiss settings when open (ignoring Cmd/Ctrl to not interfere with Panic killswitch)
+  // Escape closes the panel; Cmd/Ctrl+Escape is left alone for the panic shortcut
   useEffect(() => {
     if (!isOpen) return;
 
@@ -97,469 +99,252 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, handleClose]);
 
-  // Burn Session Action (REQ-017)
-  const handleBurnSession = async () => {
-    // 1. Immediately wipe sessionStore (transcripts, solutions, detected questions)
-    clearSession();
+  // Move focus to the selected tab when the panel opens
+  useEffect(() => {
+    if (isOpen) tabRefs.current[activeTab]?.focus();
+  }, [isOpen]);
 
-    // 2. Call backend Tauri IPC command
-    await safeInvoke("burn_session");
-
-    // 3. Show instant visual feedback
-    setBurnFeedback(
-      "Session Burned: Active transcripts, solutions, and memory buffers have been permanently eradicated."
-    );
-    setTimeout(() => setBurnFeedback(null), 4000);
-  };
-
-  // Reset Settings Action
-  const handleResetSettings = () => {
-    resetSettings();
-    setResetFeedback("All settings restored to factory defaults.");
-    setTimeout(() => setResetFeedback(null), 3000);
-  };
+  // Refresh local model status when the panel opens or the tab changes
+  useEffect(() => {
+    if (!isOpen) return;
+    listLocalSttModels().then((models) => {
+      if (models) setLocalModels(models);
+    });
+  }, [isOpen, activeTab]);
 
   if (!isOpen) {
     return null;
   }
 
-  return (
-    <div
-      data-testid="settings-modal-root"
-      className="fixed inset-0 z-50 flex justify-end select-none"
-    >
-      {/* Backdrop overlay */}
-      <div
-        data-testid="settings-backdrop"
-        onClick={handleClose}
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 animate-in fade-in"
-      />
+  const tinyModel = localModels.find((m) => m.filename.includes("tiny"));
+  const modelReady = Boolean(tinyModel?.is_available);
+  const sttKeyMissing =
+    (sttMode === "groq" && !apiKeys.groq) || (sttMode === "deepgram" && !apiKeys.deepgram);
 
-      {/* Sliding Sheet Container */}
+  const handleDownloadModel = async () => {
+    setDownloading(true);
+    setModelNotice(null);
+    try {
+      const path = await downloadSttModel("tiny");
+      if (!path) throw new Error("Model download returned no path");
+      const updated = await listLocalSttModels();
+      if (updated) setLocalModels(updated);
+      setModelNotice({ ok: true, text: "Model downloaded" });
+      window.clearTimeout(noticeTimer.current);
+      noticeTimer.current = window.setTimeout(() => setModelNotice(null), CONFIRMED_MS);
+    } catch {
+      setModelNotice({ ok: false, text: "Download failed. Check your connection." });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  // Two-step confirm: the first click arms the action, a second click within 3s runs it
+  const runDanger = async (action: DangerAction) => {
+    if (armed !== action) {
+      window.clearTimeout(armTimer.current);
+      setArmed(action);
+      armTimer.current = window.setTimeout(() => setArmed(null), CONFIRM_MS);
+      return;
+    }
+    window.clearTimeout(armTimer.current);
+    setArmed(null);
+    if (action === "burn") {
+      clearSession();
+      await safeInvoke("burn_session");
+    } else {
+      resetSettings();
+    }
+    setDone(action);
+    window.clearTimeout(doneTimer.current);
+    doneTimer.current = window.setTimeout(() => setDone(null), CONFIRMED_MS);
+  };
+
+  const onTabKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const index = TABS.findIndex((t) => t.id === activeTab);
+    const next = TABS[(index + step + TABS.length) % TABS.length].id;
+    setActiveTab(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  return (
+    <section
+      role="dialog"
+      aria-label="Settings"
+      data-testid="settings-drawer"
+      className="sk-panel min-h-0 max-h-full"
+    >
+      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+        <h2 className="sk-title flex-1">Settings</h2>
+        <button
+          type="button"
+          onClick={handleClose}
+          aria-label="Close settings"
+          title="Close settings"
+          className="sk-icon-btn"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </div>
+
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        data-testid="settings-drawer"
-        className={cn(
-          "relative z-10 w-full sm:w-[500px] h-full max-h-screen",
-          "bg-zinc-950/95 border-l border-zinc-800/80 shadow-2xl backdrop-blur-xl",
-          "flex flex-col text-zinc-100 overflow-hidden",
-          "animate-in slide-in-from-right duration-300 ease-out"
-        )}
+        role="tablist"
+        aria-label="Settings sections"
+        onKeyDown={onTabKeyDown}
+        className="mx-3 grid grid-cols-4 gap-1 rounded-lg bg-white/[0.04] p-1"
       >
-        {/* Drawer Header */}
-        <header className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/80 bg-zinc-900/40 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
-              <Shield className="h-4 w-4" />
+        {TABS.map(({ id, label, icon: Icon }) => {
+          const selected = id === activeTab;
+          return (
+            <button
+              key={id}
+              ref={(el) => {
+                tabRefs.current[id] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`settings-tab-${id}`}
+              aria-selected={selected}
+              aria-controls="settings-tabpanel"
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveTab(id)}
+              className={cn(
+                "flex h-7 items-center justify-center gap-1.5 rounded text-[12px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400/70",
+                selected ? "bg-white/10 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        role="tabpanel"
+        id="settings-tabpanel"
+        aria-labelledby={`settings-tab-${activeTab}`}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-3 sk-scroll"
+      >
+        {activeTab === "keys" && <ApiKeyInputs />}
+
+        {activeTab === "profile" && <ProfileEditor />}
+
+        {activeTab === "audio" && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <h3 className="sk-label">Speech-to-text engine</h3>
+              <div role="radiogroup" aria-label="Speech-to-text engine" className="grid gap-1.5">
+                {STT_OPTIONS.map((opt) => {
+                  const selected = sttMode === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setSttMode(opt.id)}
+                      className={cn(
+                        "flex w-full flex-col items-start gap-0.5 rounded-lg p-3 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400/70",
+                        selected
+                          ? "bg-sky-500/15 text-zinc-100 ring-1 ring-inset ring-sky-400/50"
+                          : "bg-white/[0.04] text-zinc-300 hover:bg-white/[0.07]"
+                      )}
+                    >
+                      <span className="text-[13px] font-medium">{opt.name}</span>
+                      <span className="sk-meta">{opt.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {sttKeyMissing && (
+                <p className="sk-meta">
+                  Add a {sttMode === "groq" ? "Groq" : "Deepgram"} key on the Keys tab to use this engine.
+                </p>
+              )}
             </div>
-            <div>
-              <h2 className="text-sm font-semibold tracking-tight text-zinc-100">
-                Settings & Personalization
-              </h2>
-              <span className="text-[10px] text-zinc-400">
-                Stealth Copilot Overlay Configuration
-              </span>
+
+            {sttMode === "whisper_local" && (
+              <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-medium text-zinc-100">
+                    Local speech model (tiny, about 75 MB)
+                  </span>
+                  <span className="sk-meta">{modelReady ? "Downloaded" : "Not downloaded"}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  {!modelReady && (
+                    <button
+                      type="button"
+                      onClick={handleDownloadModel}
+                      disabled={downloading}
+                      className="sk-btn-primary"
+                    >
+                      {downloading && (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      )}
+                      <span>Download model</span>
+                    </button>
+                  )}
+                  {modelNotice && (
+                    <span
+                      role="status"
+                      className={cn("sk-meta", modelNotice.ok ? "text-emerald-400" : "text-red-300")}
+                    >
+                      {modelNotice.text}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <p className="sk-meta">Audio is captured only while a meeting is live.</p>
+          </div>
+        )}
+
+        {activeTab === "danger" && (
+          <div className="space-y-2">
+            <p className="sk-meta">These can&apos;t be undone.</p>
+
+            <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
+              <h3 className="text-[13px] font-medium text-zinc-100">Burn session</h3>
+              <p className="sk-meta">
+                Clears transcripts, questions and answers, and stops listening.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" onClick={() => runDanger("burn")} className="sk-btn-danger">
+                  {armed === "burn" ? "Click again to burn" : "Burn"}
+                </button>
+                {done === "burn" && (
+                  <span role="status" className="sk-meta text-emerald-400">
+                    Session cleared
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
+              <h3 className="text-[13px] font-medium text-zinc-100">Reset settings</h3>
+              <p className="sk-meta">
+                Restores models, persona and speech settings to their defaults.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" onClick={() => runDanger("reset")} className="sk-btn-secondary">
+                  {armed === "reset" ? "Click again to reset" : "Reset"}
+                </button>
+                {done === "reset" && (
+                  <span role="status" className="sk-meta text-emerald-400">
+                    Settings reset
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-
-          <button
-            type="button"
-            data-testid="close-settings-btn"
-            onClick={handleClose}
-            aria-label="Close Settings"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 border border-zinc-800/60 transition-colors"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-
-        {/* Tab Navigation */}
-        <nav
-          aria-label="Settings Tabs"
-          className="flex border-b border-zinc-800/80 bg-zinc-900/30 px-3 text-xs overflow-x-auto shrink-0"
-        >
-          <button
-            type="button"
-            data-testid="tab-keys"
-            onClick={() => setActiveTab("keys")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2.5 font-medium border-b-2 transition-colors whitespace-nowrap",
-              activeTab === "keys"
-                ? "border-sky-500 text-sky-400 bg-sky-500/5"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            )}
-          >
-            <Key className="h-3.5 w-3.5" />
-            <span>API Keys & Models</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="tab-profile"
-            onClick={() => setActiveTab("profile")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2.5 font-medium border-b-2 transition-colors whitespace-nowrap",
-              activeTab === "profile"
-                ? "border-sky-500 text-sky-400 bg-sky-500/5"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            )}
-          >
-            <User className="h-3.5 w-3.5" />
-            <span>Profile & Context</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="tab-audio"
-            onClick={() => setActiveTab("audio")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2.5 font-medium border-b-2 transition-colors whitespace-nowrap",
-              activeTab === "audio"
-                ? "border-sky-500 text-sky-400 bg-sky-500/5"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            )}
-          >
-            <Mic className="h-3.5 w-3.5" />
-            <span>Audio & STT</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="tab-danger"
-            onClick={() => setActiveTab("danger")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2.5 font-medium border-b-2 transition-colors whitespace-nowrap",
-              activeTab === "danger"
-                ? "border-red-500 text-red-400 bg-red-500/5"
-                : "border-transparent text-zinc-400 hover:text-red-300"
-            )}
-          >
-            <Flame className="h-3.5 w-3.5" />
-            <span>Danger Zone</span>
-          </button>
-        </nav>
-
-        {/* Tab Content Body */}
-        <main className="flex-1 p-5 overflow-y-auto custom-scrollbar">
-          {/* Tab 1: API Keys & Models */}
-          {activeTab === "keys" && <ApiKeyInputs />}
-
-          {/* Tab 2: Profile & Personalization */}
-          {activeTab === "profile" && <ProfileEditor />}
-
-          {/* Tab 3: Audio & Speech-to-Text */}
-          {activeTab === "audio" && (
-            <div data-testid="audio-settings" className="space-y-6">
-              <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5 space-y-1">
-                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-                  <Mic className="h-3.5 w-3.5 text-sky-400" />
-                  <span>Audio & Transcription Engine Settings</span>
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Choose between 100% offline Metal STT for ultimate confidentiality or cloud low-latency transcription.
-                </p>
-              </div>
-
-              {/* STT Mode Selection */}
-              <div className="space-y-3">
-                <h4 className="text-xs font-semibold text-zinc-300">
-                  Speech-to-Text (STT) Backend
-                </h4>
-
-                <div className="space-y-2.5">
-                  {/* Embedded Whisper Local */}
-                  <button
-                    type="button"
-                    data-testid="stt-whisper-local"
-                    onClick={() => setSttMode("whisper_local")}
-                    className={cn(
-                      "w-full text-left rounded-xl border p-3.5 transition-all",
-                      sttMode === "whisper_local"
-                        ? "border-emerald-500/80 bg-emerald-950/20 text-emerald-100 shadow-sm"
-                        : "border-zinc-800/80 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700/80"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <Cpu className="h-4 w-4 text-emerald-400" />
-                        <span className="text-xs font-semibold text-zinc-100">
-                          Embedded Whisper (Local Metal)
-                        </span>
-                      </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        100% Offline • Recommended
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Runs locally on Apple Silicon GPU/ANE using whisper.cpp Metal shaders. Zero audio bytes ever leave your device.
-                    </p>
-                  </button>
-
-                  {/* Groq Whisper */}
-                  <button
-                    type="button"
-                    data-testid="stt-groq"
-                    onClick={() => setSttMode("groq")}
-                    className={cn(
-                      "w-full text-left rounded-xl border p-3.5 transition-all",
-                      sttMode === "groq"
-                        ? "border-sky-500/80 bg-sky-950/20 text-sky-100 shadow-sm"
-                        : "border-zinc-800/80 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700/80"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <Radio className="h-4 w-4 text-sky-400" />
-                        <span className="text-xs font-semibold text-zinc-100">
-                          Groq Whisper Cloud
-                        </span>
-                      </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30">
-                        Ultra-Fast (&lt;250ms)
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Batched chunk streaming sent to Groq LPU inference engines. Requires Groq API Key.
-                    </p>
-                  </button>
-
-                  {/* Deepgram Nova-2 */}
-                  <button
-                    type="button"
-                    data-testid="stt-deepgram"
-                    onClick={() => setSttMode("deepgram")}
-                    className={cn(
-                      "w-full text-left rounded-xl border p-3.5 transition-all",
-                      sttMode === "deepgram"
-                        ? "border-purple-500/80 bg-purple-950/20 text-purple-100 shadow-sm"
-                        : "border-zinc-800/80 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700/80"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <Mic className="h-4 w-4 text-purple-400" />
-                        <span className="text-xs font-semibold text-zinc-100">
-                          Deepgram Nova-2 Streaming
-                        </span>
-                      </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                        Real-time Diarization
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Continuous bi-directional WebSocket audio stream with high accuracy speaker diarization.
-                    </p>
-                  </button>
-                </div>
-
-                {/* Local Whisper Model Management */}
-                {sttMode === "whisper_local" && (
-                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-zinc-200">
-                        Local Model: ggml-tiny.en.bin
-                      </span>
-                      <span
-                        className={cn(
-                          "text-[10px] px-2 py-0.5 rounded-full font-medium border",
-                          Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
-                            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                            : "bg-amber-500/20 text-amber-300 border-amber-500/30"
-                        )}
-                      >
-                        {Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
-                          ? "Installed & Ready"
-                          : "Not Downloaded"}
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      {Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
-                        ? "Model weights are loaded with Apple Metal GPU acceleration. 100% offline speech-to-text is ready."
-                        : "Local weights (~75 MB) are required for offline transcription. Once downloaded, Sidekick transcribes with zero cloud dependencies."}
-                    </p>
-
-                    {downloadProgress && (
-                      <p className="text-[11px] text-sky-400 flex items-center gap-1.5">
-                        {downloadingModel && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
-                        <span>{downloadProgress}</span>
-                      </p>
-                    )}
-
-                    {!Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available) && (
-                      <button
-                        type="button"
-                        data-testid="download-tiny-model-btn"
-                        onClick={handleDownloadTiny}
-                        disabled={Boolean(downloadingModel)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors"
-                      >
-                        {downloadingModel ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            <span>Downloading (~75 MB)...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Download className="h-3.5 w-3.5" />
-                            <span>Download Tiny Model (75 MB)</span>
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Groq Key Alert */}
-                {sttMode === "groq" && !useSettingsStore.getState().apiKeys.groq && (
-                  <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 p-3 text-xs text-sky-200 flex items-start gap-2">
-                    <Radio className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <span className="font-semibold text-sky-200">Groq API Key Required</span>
-                      <p className="text-[11px] text-sky-300/80 leading-relaxed">
-                        To use Groq Whisper Cloud with ultra-fast latency, enter your Groq API key in the{" "}
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("keys")}
-                          className="underline text-sky-400 font-medium"
-                        >
-                          API Keys & Models
-                        </button>{" "}
-                        tab.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Deepgram Key Alert */}
-                {sttMode === "deepgram" && !useSettingsStore.getState().apiKeys.deepgram && (
-                  <div className="rounded-xl border border-purple-500/30 bg-purple-950/20 p-3 text-xs text-purple-200 flex items-start gap-2">
-                    <Mic className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <span className="font-semibold text-purple-200">Deepgram Token Required</span>
-                      <p className="text-[11px] text-purple-300/80 leading-relaxed">
-                        To use Deepgram streaming transcription, enter your Deepgram token in the{" "}
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("keys")}
-                          className="underline text-purple-400 font-medium"
-                        >
-                          API Keys & Models
-                        </button>{" "}
-                        tab.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Driverless Audio Architecture Note */}
-              <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-3.5 space-y-2">
-                <span className="text-xs font-semibold text-zinc-300">
-                  Driverless ScreenCaptureKit Loopback
-                </span>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  System audio and interviewer speech are extracted via Apple ScreenCaptureKit zero-driver loopback. No BlackHole or virtual audio drivers are installed.
-                </p>
-              </section>
-            </div>
-          )}
-
-          {/* Tab 4: Danger Zone */}
-          {activeTab === "danger" && (
-            <div data-testid="danger-zone" className="space-y-6">
-              {/* Alert Warning */}
-              <div className="rounded-xl border border-red-500/30 bg-red-950/20 p-4 space-y-2 text-red-200">
-                <div className="flex items-center gap-2 text-xs font-bold text-red-400">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>Emergency Destruction & Privacy Purge</span>
-                </div>
-                <p className="text-[11px] text-red-300/80 leading-relaxed">
-                  These operations immediately destroy sensitive active session state, transcripts, and in-memory caches. This cannot be undone.
-                </p>
-              </div>
-
-              {/* Burn Feedback Banner */}
-              {burnFeedback && (
-                <div
-                  data-testid="burn-session-feedback"
-                  className="rounded-xl border border-red-500/50 bg-red-950/40 p-3 text-xs text-red-200 flex items-start gap-2 animate-in fade-in"
-                >
-                  <Flame className="h-4 w-4 text-red-400 shrink-0 mt-0.5 animate-bounce" />
-                  <span>{burnFeedback}</span>
-                </div>
-              )}
-
-              {/* Reset Feedback Banner */}
-              {resetFeedback && (
-                <div
-                  data-testid="reset-feedback"
-                  className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-200 flex items-start gap-2 animate-in fade-in"
-                >
-                  <CheckCircle2 className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-                  <span>{resetFeedback}</span>
-                </div>
-              )}
-
-              {/* Action 1: Burn Session (REQ-017) */}
-              <section className="rounded-xl border border-red-900/50 bg-zinc-900/40 p-4 space-y-3">
-                <div>
-                  <h4 className="text-xs font-semibold text-red-400">
-                    Burn Active Session (REQ-017)
-                  </h4>
-                  <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">
-                    Instantly erases all recorded interview transcripts, progressive solution stages, questions, and active audio ring buffers.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  data-testid="burn-session-btn"
-                  onClick={handleBurnSession}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs text-white bg-red-600 hover:bg-red-700 active:bg-red-800 border border-red-500 shadow-lg shadow-red-950/60 transition-all"
-                >
-                  <Flame className="h-4 w-4 text-red-200" />
-                  <span>Burn Session</span>
-                </button>
-              </section>
-
-              {/* Action 2: Reset All Settings */}
-              <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 space-y-3">
-                <div>
-                  <h4 className="text-xs font-semibold text-zinc-300">
-                    Reset Settings to Default
-                  </h4>
-                  <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">
-                    Resets model selection, persona tone presets, STT mode, and clears configured keys from memory.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  data-testid="reset-settings-btn"
-                  onClick={handleResetSettings}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-medium text-zinc-300 bg-zinc-900 hover:bg-zinc-800 hover:text-zinc-100 border border-zinc-700/60 transition-colors"
-                >
-                  <RotateCcw className="h-3.5 w-3.5 text-zinc-400" />
-                  <span>Reset All Settings</span>
-                </button>
-              </section>
-            </div>
-          )}
-        </main>
-
-        {/* Drawer Footer with Hotkey Tip */}
-        <footer className="px-5 py-3 border-t border-zinc-800/80 bg-zinc-950/80 flex items-center justify-between text-[11px] text-zinc-500 shrink-0">
-          <span>
-            Toggle Drawer: <kbd className="rounded bg-zinc-900 px-1 py-0.5 text-zinc-400 border border-zinc-800">⌘ ,</kbd>
-          </span>
-          <span>
-            Dismiss: <kbd className="rounded bg-zinc-900 px-1 py-0.5 text-zinc-400 border border-zinc-800">Esc</kbd>
-          </span>
-        </footer>
+        )}
       </div>
-    </div>
+    </section>
   );
 };

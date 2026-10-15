@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useAppStore, setupAppEventListeners } from "../store/appStore";
 
 describe("useAppStore", () => {
@@ -9,7 +9,32 @@ describe("useAppStore", () => {
       isClickThrough: false,
       isVisible: false,
       isPanicked: false,
+      meetingStatus: "idle",
+      meetingStartedAt: null,
+      meetingError: null,
+      isAskOpen: false,
     });
+  });
+
+  describe("meeting start/stop", () => {
+    it("does not record until the user starts a meeting, then stops cleanly", async () => {
+      expect(useAppStore.getState().meetingStatus).toBe("idle");
+
+      await useAppStore.getState().startMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("live");
+      expect(useAppStore.getState().meetingStartedAt).toEqual(expect.any(Number));
+
+      await useAppStore.getState().stopMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("idle");
+      expect(useAppStore.getState().meetingStartedAt).toBeNull();
+    });
+
+    it("panic ends the meeting", async () => {
+      await useAppStore.getState().startMeeting();
+      await useAppStore.getState().triggerPanic();
+      expect(useAppStore.getState().meetingStatus).toBe("idle");
+    });
+
   });
 
   it("should have expected default state", () => {
@@ -53,23 +78,12 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().isClickThrough).toBe(false);
   });
 
-  it("should handle panic trigger and reset", async () => {
+  it("should handle panic trigger", async () => {
     useAppStore.setState({ isVisible: true, isPanicked: false });
 
     await useAppStore.getState().triggerPanic();
     expect(useAppStore.getState().isPanicked).toBe(true);
     expect(useAppStore.getState().isVisible).toBe(false);
-
-    useAppStore.getState().resetPanic();
-    expect(useAppStore.getState().isPanicked).toBe(false);
-  });
-
-  it("should reset panic state when window becomes visible", () => {
-    useAppStore.setState({ isPanicked: true, isVisible: false });
-
-    useAppStore.getState().setIsVisible(true);
-    expect(useAppStore.getState().isVisible).toBe(true);
-    expect(useAppStore.getState().isPanicked).toBe(false);
   });
 
   it("should setup event listeners and unlisten without throwing", async () => {
@@ -97,13 +111,36 @@ describe("useAppStore", () => {
     });
     expect(useSessionStore.getState().transcript.length).toBeGreaterThan(0);
 
+    await useAppStore.getState().startMeeting();
     const unlisten = await setupAppEventListeners();
     const burnedHandler = eventHandlers.get("sidekick://session_burned");
-    if (burnedHandler) {
-      burnedHandler({ payload: {} });
-      expect(useSessionStore.getState().transcript.length).toBe(0);
-    }
+    expect(burnedHandler).toBeDefined();
+    burnedHandler!({ payload: {} });
+    expect(useSessionStore.getState().transcript.length).toBe(0);
+    // burn_session stops audio capture in Rust, so the meeting must end too
+    expect(useAppStore.getState().meetingStatus).toBe("idle");
     unlisten();
     vi.doUnmock("@tauri-apps/api/event");
+  });
+
+  // Keep last: it resets the module registry.
+  it("calls the backend inside Tauri and reports a refused start", async () => {
+    vi.resetModules();
+    const invoke = vi.fn().mockRejectedValueOnce("Screen Recording permission denied");
+    vi.doMock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke }));
+    const { useAppStore: store } = await import("../store/appStore");
+
+    await store.getState().startMeeting();
+    expect(invoke).toHaveBeenCalledWith("start_audio_capture", { config: null });
+    expect(store.getState().meetingStatus).toBe("idle");
+    expect(store.getState().meetingError).toContain("permission");
+
+    invoke.mockResolvedValue(undefined);
+    await store.getState().startMeeting();
+    expect(store.getState().meetingStatus).toBe("live");
+    expect(store.getState().meetingError).toBeNull();
+
+    vi.doUnmock("@tauri-apps/api/core");
+    vi.resetModules();
   });
 });

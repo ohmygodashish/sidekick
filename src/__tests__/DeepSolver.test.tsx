@@ -610,7 +610,7 @@ Space Complexity: O(C) capacity
       expect(screen.getByTestId("is-solving").textContent).toBe("false");
     });
 
-    it("aborts when window event sidekick:panic is dispatched", async () => {
+    it("aborts when the panic flag is set in the app store", async () => {
       render(<TestDeepSolverComponent />);
 
       await act(async () => {
@@ -618,7 +618,7 @@ Space Complexity: O(C) capacity
       });
 
       await act(async () => {
-        window.dispatchEvent(new CustomEvent("sidekick:panic"));
+        useAppStore.setState({ isPanicked: true });
       });
 
       expect(screen.getByTestId("is-solving").textContent).toBe("false");

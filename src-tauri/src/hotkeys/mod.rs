@@ -4,7 +4,7 @@
 //! - Panic Killswitch (`Cmd + Esc` / `Super + Escape`): Synchronously hides window, sets panic state, emits `sidekick://panic` (< 25ms).
 //! - Window Visibility Toggle (`Cmd + Shift + Space` / `Super + Shift + Space`): Shows & focuses or hides window.
 //! - Click-Through Toggle (`Cmd + Shift + C` / `Super + Shift + C`): Enables mouse pass-through to underlying apps.
-//! - Layout Mode Toggle (`Cmd + Shift + M` / `Super + Shift + M`): Toggles between Floating HUD and Dynamic Notch.
+//! - Layout Mode Toggle (`Cmd + Shift + M` / `Super + Shift + M`): Toggles compact view (control bar only) on and off.
 //! - Opacity Configuration: Controls window alpha level.
 
 use std::str::FromStr;
@@ -38,12 +38,12 @@ pub const EVENT_ACTIVE_WINDOW_CAPTURED: &str = "sidekick://active_window_capture
 pub enum LayoutMode {
     /// Freely draggable, resizable window with opacity control
     FloatingHud,
-    /// Snapped directly beneath the MacBook notch for webcam eye contact
+    /// Compact view: the frontend shows only the control bar (name kept for config compatibility)
     DynamicNotch,
 }
 
 impl LayoutMode {
-    /// Toggles between Floating HUD and Dynamic Notch
+    /// Toggles compact view on and off
     pub fn toggle(&self) -> Self {
         match self {
             Self::FloatingHud => Self::DynamicNotch,

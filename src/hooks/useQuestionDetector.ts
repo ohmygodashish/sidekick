@@ -1,13 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSessionStore, DetectedQuestion } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
-import { useAppStore } from "../store/appStore";
 import {
   detectQuestion,
   QuestionDetectionPayload,
   QuestionDetectorOptions,
 } from "../services/ai/questionDetector";
-import { safeEmit } from "../lib/ipc";
 
 export interface UseQuestionDetectorOptions {
   onQuestionDetected?: (payload: QuestionDetectionPayload) => void;
@@ -20,7 +18,6 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
   const { onQuestionDetected, onDeepSolve, enabled = true, allowCandidate } = options || {};
   const [isEvaluating, setIsEvaluating] = useState(false);
   const activeQuestion = useSessionStore((s) => s.activeQuestion);
-  const layoutMode = useAppStore((s) => s.layoutMode);
 
   const lastEvaluatedTurnIdRef = useRef<string | null>(null);
 
@@ -31,6 +28,7 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
 
       onDeepSolve?.(targetQuestion);
 
+      // Window event only: a Tauri emit echoes back to this webview and cancelled the solve
       if (typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent("sidekick:deep_solve", {
@@ -38,8 +36,6 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
           })
         );
       }
-
-      safeEmit("sidekick://deep_solve_triggered", targetQuestion).catch(() => {});
     },
     [onDeepSolve]
   );
@@ -61,13 +57,6 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
         if (result && result.confidence >= 0.7) {
           useSessionStore.getState().setActiveQuestion(result);
           onQuestionDetected?.(result);
-
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(
-              new CustomEvent("sidekick:question_detected", { detail: result })
-            );
-          }
-          safeEmit("sidekick://question_detected", result).catch(() => {});
         }
 
         return result;
@@ -81,7 +70,7 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
     [onQuestionDetected]
   );
 
-  // Subscribe to STT turns from Interviewer (Channel 0) and Candidate (Channel 1 in pill mode / copilot)
+  // Subscribe to STT turns from the interviewer (and the candidate only when explicitly allowed)
   useEffect(() => {
     if (!enabled) return;
 
@@ -90,9 +79,7 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
       if (transcript.length === 0) return;
 
       const latestTurn = transcript[transcript.length - 1];
-      // Evaluate interviewer speech, or candidate speech if allowed / in dynamic notch pill mode
-      const isCandidateAllowed = allowCandidate ?? (layoutMode === "dynamic_notch");
-      if (latestTurn.speaker === "candidate" && !isCandidateAllowed) return;
+      if (latestTurn.speaker === "candidate" && !allowCandidate) return;
       if (latestTurn.id === lastEvaluatedTurnIdRef.current) return;
 
       lastEvaluatedTurnIdRef.current = latestTurn.id;
@@ -102,30 +89,28 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
     return () => {
       unsubscribe();
     };
-  }, [enabled, evaluateTurn, allowCandidate, layoutMode]);
+  }, [enabled, evaluateTurn, allowCandidate]);
 
   // Global hotkeys: Enter or Cmd+Enter to trigger Deep Solve when activeQuestion is set (REQ-012)
   useEffect(() => {
     if (!enabled || !activeQuestion) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.repeat || e.altKey || e.shiftKey) return;
+
+      // Controls, fields, dialogs and menus handle Enter themselves (buttons, follow-up box, settings)
       const target = e.target as HTMLElement | null;
-      const isInput =
+      if (
         target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
-
-      const isCmdEnter = (e.metaKey || e.ctrlKey) && e.key === "Enter";
-      const isPlainEnter =
-        !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key === "Enter";
-
-      // If user is inside an input field, only Cmd+Enter triggers Deep Solve.
-      // If outside an input field, both Enter and Cmd+Enter trigger Deep Solve.
-      if (isCmdEnter || (!isInput && isPlainEnter)) {
-        e.preventDefault();
-        triggerDeepSolve(activeQuestion);
+        (["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(target.tagName) ||
+          target.isContentEditable ||
+          target.closest?.('[role="dialog"], [role="menu"]'))
+      ) {
+        return;
       }
+
+      e.preventDefault();
+      triggerDeepSolve(activeQuestion);
     };
 
     window.addEventListener("keydown", handleKeyDown);

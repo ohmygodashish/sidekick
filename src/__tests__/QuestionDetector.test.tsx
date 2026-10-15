@@ -8,7 +8,7 @@ import {
   detectQuestion,
 } from "../services/ai/questionDetector";
 import { useQuestionDetector } from "../hooks/useQuestionDetector";
-import { QuestionBanner } from "../components/question/QuestionBanner";
+import { AnswerPanel } from "../components/answer/AnswerPanel";
 import { useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 
@@ -32,7 +32,7 @@ function TestQuestionDetectorComponent({
     <div>
       <div data-testid="is-evaluating">{String(isEvaluating)}</div>
       <div data-testid="has-active-question">{String(Boolean(activeQuestion))}</div>
-      {activeQuestion && <QuestionBanner />}
+      {activeQuestion && <AnswerPanel />}
       <input data-testid="test-input" placeholder="Type here..." />
       <button data-testid="manual-trigger-btn" onClick={() => triggerDeepSolve()}>
         Manual Trigger
@@ -245,8 +245,8 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
     });
   });
 
-  describe("4. QuestionBanner UI Component (REQ-011, REQ-012)", () => {
-    it("renders extracted question, confidence badge, bullet points, and Deep Solve pill in HUD mode", () => {
+  describe("4. AnswerPanel question view (REQ-011, REQ-012)", () => {
+    it("renders the extracted question, quick pointers and the Cmd+Enter hint", () => {
       useSessionStore.getState().setActiveQuestion({
         questionId: "q_cache_test",
         timestamp: Date.now(),
@@ -260,75 +260,17 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
         ],
       });
 
-      render(<QuestionBanner variant="hud" />);
+      render(<AnswerPanel />);
 
-      // Extracted question title
-      expect(screen.getByText("Live Detected Question")).toBeDefined();
       expect(
         screen.getByText("How would you design a distributed cache to handle hot keys?")
       ).toBeDefined();
-
-      // Confidence badge
-      expect(screen.getByText("Confidence: 95%")).toBeDefined();
-
-      // Quick bullet points
       expect(screen.getByText("Consistent hashing with virtual nodes")).toBeDefined();
-      expect(
-        screen.getByText("Key salting and read replicas for hot keys")
-      ).toBeDefined();
-
-      // Action pill: Deep Solve (Enter)
-      const deepSolveBtn = screen.getByTestId("deep-solve-btn");
-      expect(deepSolveBtn).toBeDefined();
-      expect(screen.getByText("Deep Solve (Enter)")).toBeDefined();
+      expect(screen.getByText("Key salting and read replicas for hot keys")).toBeDefined();
+      expect(screen.getByText("⌘↵")).toBeDefined();
     });
 
-    it("renders appropriately in Notch variant with compact styling and match percentage", () => {
-      useSessionStore.getState().setActiveQuestion({
-        questionId: "q_notch_test",
-        timestamp: Date.now(),
-        confidence: 0.92,
-        rawTranscript: "What is Raft consensus?",
-        extractedQuestion: "Explain the Raft consensus algorithm",
-        quickPointers: ["Leader election", "Log replication", "Heartbeats"],
-      });
-
-      render(<QuestionBanner variant="notch" testId="notch-question-card" />);
-
-      expect(screen.getByTestId("notch-question-card")).toBeDefined();
-      expect(screen.getByText("Detected Question")).toBeDefined();
-      expect(screen.getByText("92% Match")).toBeDefined();
-      expect(screen.getByText("Explain the Raft consensus algorithm")).toBeDefined();
-      expect(screen.getByText("Leader election")).toBeDefined();
-      expect(screen.getByTestId("deep-solve-btn")).toBeDefined();
-    });
-
-    it("triggers onDeepSolve callback and dispatches custom event when Deep Solve button is clicked", () => {
-      const handleDeepSolve = vi.fn();
-      const domEventSpy = vi.fn();
-      window.addEventListener("sidekick:deep_solve", domEventSpy);
-
-      useSessionStore.getState().setActiveQuestion({
-        questionId: "q_click_test",
-        timestamp: Date.now(),
-        confidence: 0.98,
-        rawTranscript: "How would you design a rate limiter?",
-        extractedQuestion: "How would you design a rate limiter for multi-tenant API?",
-        quickPointers: ["Token bucket", "Redis Lua script"],
-      });
-
-      render(<QuestionBanner onDeepSolve={handleDeepSolve} />);
-
-      const deepSolveBtn = screen.getByTestId("deep-solve-btn");
-      fireEvent.click(deepSolveBtn);
-
-      expect(handleDeepSolve).toHaveBeenCalledTimes(1);
-      expect(domEventSpy).toHaveBeenCalledTimes(1);
-
-      window.removeEventListener("sidekick:deep_solve", domEventSpy);
-    });
-
-    it("dismisses question and clears activeQuestion when dismiss button is clicked", () => {
+    it("clears the question when the close button is clicked", () => {
       useSessionStore.getState().setActiveQuestion({
         questionId: "q_dismiss",
         timestamp: Date.now(),
@@ -338,11 +280,10 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
         quickPointers: ["Point 1"],
       });
 
-      render(<QuestionBanner />);
+      render(<AnswerPanel />);
 
       expect(useSessionStore.getState().activeQuestion).not.toBeNull();
-      const dismissBtn = screen.getByTestId("dismiss-question-btn");
-      fireEvent.click(dismissBtn);
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
       expect(useSessionStore.getState().activeQuestion).toBeNull();
     });
@@ -468,18 +409,27 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
       const input = screen.getByTestId("test-input");
       input.focus();
 
-      // Plain Enter inside input: should NOT trigger Deep Solve
+      // Fields handle Enter and Cmd+Enter themselves (follow-up box, settings), so neither triggers here
       fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", metaKey: true });
       expect(onDeepSolve).not.toHaveBeenCalled();
 
-      // Cmd+Enter inside input: SHOULD trigger Deep Solve
-      fireEvent.keyDown(input, { key: "Enter", code: "Enter", metaKey: true });
+      // Enter on a focused button activates the button, not Deep Solve
+      const button = document.createElement("button");
+      document.body.appendChild(button);
+      fireEvent.keyDown(button, { key: "Enter", code: "Enter" });
+      expect(onDeepSolve).not.toHaveBeenCalled();
+      button.remove();
+
+      // Holding Enter (key repeat) must not start extra paid solves
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter", metaKey: true });
+      fireEvent.keyDown(window, { key: "Enter", code: "Enter", metaKey: true, repeat: true });
       expect(onDeepSolve).toHaveBeenCalledTimes(1);
     });
   });
 
   describe("6. End-to-End Simulation Verification (Task Brief Scenario)", () => {
-    it("simulates brief transcript and verifies QuestionBanner renders in < 1s with extracted question and bullet points", async () => {
+    it("simulates brief transcript and verifies the answer panel shows the question in < 1s with bullet points", async () => {
       const startTime = performance.now();
 
       render(<TestQuestionDetectorComponent />);
@@ -494,14 +444,14 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
       });
 
       const elapsedMs = performance.now() - startTime;
-      // Verification: QuestionBanner pops up in < 1000ms (AC-004)
+      // Verification: the question appears in < 1000ms (AC-004)
       expect(elapsedMs).toBeLessThan(1000);
 
-      // Verify QuestionBanner content
+      // Verify the question content
       expect(
         screen.getByText("How would you design a distributed cache to handle hot keys?")
       ).toBeDefined();
-      expect(screen.getByText("Deep Solve (Enter)")).toBeDefined();
+      expect(screen.getByText("⌘↵")).toBeDefined();
 
       const pointers = screen.getByTestId("question-pointers");
       expect(pointers.children.length).toBeGreaterThanOrEqual(3);

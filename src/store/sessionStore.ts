@@ -53,6 +53,9 @@ export interface SessionState {
   activeSolutionProvider: string | null;
   activeSolutionModel: string | null;
   progressiveSolution: ProgressiveSolution | null;
+  isSolving: boolean;
+  streamingStage: 1 | 2 | 3 | null;
+  solveError: string | null;
 
   // Actions
   addTranscriptTurn: (turn: Omit<TranscriptTurn, "id"> & { id?: string }) => void;
@@ -93,9 +96,6 @@ export interface SessionState {
         }
       | null
   ) => void;
-  setStage1Intuition: (stage: Stage1Intuition | null) => void;
-  setStage2Code: (stage: Stage2Code | null) => void;
-  setStage3Analysis: (stage: Stage3Analysis | null) => void;
   clearSession: () => void;
 }
 
@@ -108,6 +108,9 @@ export const useSessionStore = create<SessionState>((set) => ({
   activeSolutionProvider: null,
   activeSolutionModel: null,
   progressiveSolution: null,
+  isSolving: false,
+  streamingStage: null,
+  solveError: null,
 
   addTranscriptTurn: (turn) => {
     const id =
@@ -240,45 +243,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     });
   },
 
-  setStage1Intuition: (stage) =>
-    set((state) => {
-      const progressiveSolution: ProgressiveSolution = {
-        questionId: state.activeQuestion?.questionId,
-        provider: state.activeSolutionProvider ?? undefined,
-        model: state.activeSolutionModel ?? undefined,
-        stage1Intuition: stage,
-        stage2Code: state.stage2Code,
-        stage3Analysis: state.stage3Analysis,
-      };
-      return { stage1Intuition: stage, progressiveSolution };
-    }),
-
-  setStage2Code: (stage) =>
-    set((state) => {
-      const progressiveSolution: ProgressiveSolution = {
-        questionId: state.activeQuestion?.questionId,
-        provider: state.activeSolutionProvider ?? undefined,
-        model: state.activeSolutionModel ?? undefined,
-        stage1Intuition: state.stage1Intuition,
-        stage2Code: stage,
-        stage3Analysis: state.stage3Analysis,
-      };
-      return { stage2Code: stage, progressiveSolution };
-    }),
-
-  setStage3Analysis: (stage) =>
-    set((state) => {
-      const progressiveSolution: ProgressiveSolution = {
-        questionId: state.activeQuestion?.questionId,
-        provider: state.activeSolutionProvider ?? undefined,
-        model: state.activeSolutionModel ?? undefined,
-        stage1Intuition: state.stage1Intuition,
-        stage2Code: state.stage2Code,
-        stage3Analysis: stage,
-      };
-      return { stage3Analysis: stage, progressiveSolution };
-    }),
-
   clearSession: () =>
     set({
       transcript: [],
@@ -289,5 +253,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       activeSolutionProvider: null,
       activeSolutionModel: null,
       progressiveSolution: null,
+      isSolving: false,
+      streamingStage: null,
+      solveError: null,
     }),
 }));

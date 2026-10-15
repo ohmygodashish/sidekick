@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { safeInvoke } from "../lib/ipc";
 
 export type ApiProvider =
@@ -30,7 +31,7 @@ export interface PersonalizationProfile {
 }
 
 export interface SettingsState {
-  // API Keys (secure in memory + persistent local storage fallback; Keychain sync in Task 13)
+  // API Keys (in memory only; saved to the config file via store_api_key)
   apiKeys: Record<ApiProvider, string>;
 
   // Model & Provider Selection
@@ -87,6 +88,33 @@ const defaultState = {
   profile: defaultProfile,
   sttMode: "whisper_local" as SttMode,
   isSettingsOpen: false,
+};
+
+// Settings live in ~/.config/sidekick/config.json (via load_settings / save_settings).
+// Outside Tauri this is plain localStorage, kept synchronous so tests hydrate immediately.
+const configFileStorage: StateStorage = {
+  getItem: (name) => {
+    if (!isTauri()) return localStorage.getItem(name);
+    return invoke<string | null>("load_settings")
+      .catch((err) => {
+        console.warn("[Sidekick settings] load_settings failed, using localStorage:", err);
+        return null;
+      })
+      .then((value) => value ?? localStorage.getItem(name));
+  },
+  setItem: (name, value) => {
+    if (!isTauri()) return localStorage.setItem(name, value);
+    return invoke("save_settings", { settings: value }).then(
+      () => localStorage.removeItem(name),
+      (err) => console.warn("[Sidekick settings] save_settings failed:", err)
+    );
+  },
+  removeItem: (name) => {
+    if (!isTauri()) return localStorage.removeItem(name);
+    return invoke("save_settings", { settings: "null" }).catch((err) =>
+      console.warn("[Sidekick settings] clearing settings failed:", err)
+    );
+  },
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -180,14 +208,17 @@ export const useSettingsStore = create<SettingsState>()(
       toggleSettings: () =>
         set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),
 
-      resetSettings: () => set(defaultState),
+      resetSettings: () => {
+        // Keep API keys: a reset followed by "Save keys" would otherwise delete them from the config file
+        set((state) => ({ ...defaultState, apiKeys: state.apiKeys }));
+        safeInvoke("set_stt_engine", { engine: defaultState.sttMode });
+      },
     }),
     {
       name: "sidekick-settings",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => configFileStorage),
       partialize: (state) => {
-        // Exclude apiKeys from localStorage per Global Constraint #5 & SEC-001.
-        // API keys remain strictly in-memory until Task 13 wires native macOS Keychain.
+        // Keys are excluded here; they are saved separately via store_api_key.
         const { apiKeys: _ignored, isSettingsOpen: _ignored2, ...persistedState } = state;
         return persistedState;
       },

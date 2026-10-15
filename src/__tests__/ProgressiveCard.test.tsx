@@ -1,348 +1,298 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { ProgressiveCard } from "../components/cards/ProgressiveCard";
 import { CodeBlock } from "../components/cards/CodeBlock";
-import { ComplexityBadge } from "../components/cards/ComplexityBadge";
-import { useSessionStore } from "../store/sessionStore";
+import { AnswerPanel } from "../components/answer/AnswerPanel";
+import { useSessionStore, ProgressiveSolution, DetectedQuestion } from "../store/sessionStore";
+import { useAppStore } from "../store/appStore";
 
-describe("ProgressiveCard & Progressive Disclosure Engine", () => {
+const solution: ProgressiveSolution = {
+  stage1Intuition: {
+    verbalSummary: "Use a sliding window counter backed by a sorted set.",
+    keyTradeoffs: ["Trade A", "Trade B", "Trade C", "Trade D"],
+  },
+  stage2Code: {
+    language: "python",
+    code: "def allow(key):\n    return True",
+    explanation: "Checks the window.",
+  },
+  stage3Analysis: {
+    timeComplexity: "O(log N)",
+    spaceComplexity: "O(N)",
+    edgeCases: ["Empty window", "Clock skew"],
+  },
+};
+
+const question: DetectedQuestion = {
+  questionId: "q_1",
+  timestamp: 0,
+  confidence: 0.9,
+  rawTranscript: "raw transcript",
+  extractedQuestion: "Design a rate limiter?",
+  quickPointers: ["Token bucket", "Redis Lua"],
+};
+
+const regionOf = (row: HTMLElement) => document.getElementById(row.getAttribute("aria-controls")!)!;
+
+describe("ProgressiveCard", () => {
   beforeEach(() => {
     useSessionStore.getState().clearSession();
-    vi.restoreAllMocks();
+    useAppStore.setState({ isAskOpen: false });
   });
 
-  const mockFullSolution = {
-    provider: "anthropic",
-    model: "claude-3-5-sonnet",
-    stage1Intuition: {
-      verbalSummary:
-        "We can model this as a sliding window counter using Redis sorted sets.",
-      keyTradeoffs: [
-        "Sorted sets provide O(log N) insert with atomic ZREMRANGEBYSCORE",
-        "Higher memory consumption per key than token bucket",
-      ],
-    },
-    stage2Code: {
-      language: "python",
-      code: "class RateLimiter:\n    def __init__(self, limit: int):\n        self.limit = limit\n        self.tokens = 100",
-      explanation: "Sliding window rate limiter with atomic sliding window eviction.",
-    },
-    stage3Analysis: {
-      timeComplexity: "O(log N)",
-      spaceComplexity: "O(N)",
-      edgeCases: [
-        "Clock drift between distributed Redis nodes",
-        "Sub-millisecond concurrent bursts",
-      ],
-    },
-  };
+  it("renders the summary and at most three tradeoffs", () => {
+    render(<ProgressiveCard solution={solution} />);
 
-  it("renders mock solution schema: Stage 1 intuition, Stage 2 code with badge, Stage 3 complexity", () => {
-    useSessionStore.getState().setSolution(mockFullSolution);
-
-    render(<ProgressiveCard />);
-
-    // Overall container
-    expect(screen.getByTestId("progressive-card")).toBeDefined();
-
-    // Stage 1: Intuition & Trade-offs
-    const stage1Card = screen.getByTestId("progressive-stage1-card");
-    expect(stage1Card).toBeDefined();
-    expect(screen.getByText("Stage 1: Intuition & Tradeoffs")).toBeDefined();
-    expect(
-      screen.getByText(/We can model this as a sliding window counter/)
-    ).toBeDefined();
-    expect(screen.getByText(/Sorted sets provide O\(log N\) insert/)).toBeDefined();
-
-    // Stage 2: Code block with language badge and explanation
-    const stage2Card = screen.getByTestId("progressive-stage2-card");
-    expect(stage2Card).toBeDefined();
-    expect(screen.getByText("Stage 2: Code (python)")).toBeDefined();
-    expect(
-      screen.getByText(/Sliding window rate limiter with atomic/)
-    ).toBeDefined();
-    expect(screen.getByTestId("code-language-badge").textContent).toBe("python");
-    expect(screen.getByTestId("code-block")).toBeDefined();
-
-    // Stage 3: Analysis with complexity badges and edge cases
-    const stage3Card = screen.getByTestId("progressive-stage3-card");
-    expect(stage3Card).toBeDefined();
-    expect(screen.getByText("Stage 3: Complexity & Edge Cases")).toBeDefined();
-    expect(screen.getByText("Time: O(log N)")).toBeDefined();
-    expect(screen.getByText("Space: O(N)")).toBeDefined();
-    expect(
-      screen.getByText("Clock drift between distributed Redis nodes")
-    ).toBeDefined();
-  });
-
-  it("renders Stage 1 first during partial/streaming responses (AC-006)", () => {
-    // Only Stage 1 is initially available
-    useSessionStore.getState().setStage1Intuition({
-      verbalSummary: "Binary search on partition ranges of smaller array.",
-      keyTradeoffs: ["O(log(min(M, N))) runtime"],
-    });
-
-    const { rerender } = render(<ProgressiveCard />);
-
-    // Stage 1 is rendered and open
-    expect(screen.getByTestId("progressive-stage1-card")).toBeDefined();
-    expect(
-      screen.getByText("Binary search on partition ranges of smaller array.")
-    ).toBeDefined();
-
-    // Stages 2 and 3 should not be present yet
-    expect(screen.queryByTestId("progressive-stage2-card")).toBeNull();
-    expect(screen.queryByTestId("progressive-stage3-card")).toBeNull();
-
-    // Stage 2 arrives incrementally
-    act(() => {
-      useSessionStore.getState().setStage2Code({
-        language: "typescript",
-        code: "function findMedian(): number { return 0; }",
-        explanation: "Binary search over shorter array",
-      });
-    });
-    rerender(<ProgressiveCard />);
-
-    expect(screen.getByTestId("progressive-stage2-card")).toBeDefined();
-    expect(screen.getByText("Stage 2: Code (typescript)")).toBeDefined();
-    expect(screen.queryByTestId("progressive-stage3-card")).toBeNull();
-
-    // Stage 3 arrives incrementally
-    act(() => {
-      useSessionStore.getState().setStage3Analysis({
-        timeComplexity: "O(log(min(M, N)))",
-        spaceComplexity: "O(1)",
-        edgeCases: ["Empty array", "Single element array"],
-      });
-    });
-    rerender(<ProgressiveCard />);
-
-    expect(screen.getByTestId("progressive-stage3-card")).toBeDefined();
-    expect(screen.getByText("Time: O(log(min(M, N)))")).toBeDefined();
-  });
-
-  it("toggles collapsible tiers when clicking header accordion buttons", () => {
-    useSessionStore.getState().setSolution(mockFullSolution);
-
-    render(<ProgressiveCard />);
-
-    const stage1Toggle = screen.getByTestId("progressive-stage1-toggle");
-    const stage2Toggle = screen.getByTestId("progressive-stage2-toggle");
-    const stage3Toggle = screen.getByTestId("progressive-stage3-toggle");
-
-    // All stages open by default
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-    expect(screen.getByTestId("progressive-stage2-content")).toBeDefined();
-    expect(screen.getByTestId("progressive-stage3-content")).toBeDefined();
-
-    // Collapse Stage 1
-    fireEvent.click(stage1Toggle);
-    expect(screen.queryByTestId("progressive-stage1-content")).toBeNull();
-
-    // Collapse Stage 2
-    fireEvent.click(stage2Toggle);
-    expect(screen.queryByTestId("progressive-stage2-content")).toBeNull();
-
-    // Collapse Stage 3
-    fireEvent.click(stage3Toggle);
-    expect(screen.queryByTestId("progressive-stage3-content")).toBeNull();
-
-    // Re-expand Stage 1
-    fireEvent.click(stage1Toggle);
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-  });
-
-  it("toggles stages using keyboard hotkeys 1, 2, 3", () => {
-    useSessionStore.getState().setSolution(mockFullSolution);
-
-    render(<ProgressiveCard />);
-
-    // Initially open
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-    expect(screen.getByTestId("progressive-stage2-content")).toBeDefined();
-    expect(screen.getByTestId("progressive-stage3-content")).toBeDefined();
-
-    // Press '1' to collapse Stage 1
-    fireEvent.keyDown(window, { key: "1" });
-    expect(screen.queryByTestId("progressive-stage1-content")).toBeNull();
-
-    // Press '2' to collapse Stage 2
-    fireEvent.keyDown(window, { key: "2" });
-    expect(screen.queryByTestId("progressive-stage2-content")).toBeNull();
-
-    // Press '3' to collapse Stage 3
-    fireEvent.keyDown(window, { key: "3" });
-    expect(screen.queryByTestId("progressive-stage3-content")).toBeNull();
-
-    // Press '1' again to re-expand Stage 1
-    fireEvent.keyDown(window, { key: "1" });
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-
-    // Press '2' again to re-expand Stage 2
-    fireEvent.keyDown(window, { key: "2" });
-    expect(screen.getByTestId("progressive-stage2-content")).toBeDefined();
-
-    // Press '3' again to re-expand Stage 3
-    fireEvent.keyDown(window, { key: "3" });
-    expect(screen.getByTestId("progressive-stage3-content")).toBeDefined();
-  });
-
-  it("ignores hotkeys when typing in input or textarea elements", () => {
-    useSessionStore.getState().setSolution(mockFullSolution);
-
-    render(
-      <div>
-        <input data-testid="test-input" type="text" />
-        <ProgressiveCard />
-      </div>
+    expect(screen.getByTestId("answer-summary").textContent).toBe(
+      "Use a sliding window counter backed by a sorted set."
     );
-
-    const input = screen.getByTestId("test-input");
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-
-    // Type '1' in input: should NOT collapse Stage 1
-    fireEvent.keyDown(input, { key: "1" });
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
+    expect(screen.getByText("Trade A")).toBeDefined();
+    expect(screen.getByText("Trade C")).toBeDefined();
+    expect(screen.queryByText("Trade D")).toBeNull();
   });
 
-  it("ignores hotkeys when modifier keys (metaKey, ctrlKey, altKey) are pressed", () => {
-    useSessionStore.getState().setSolution(mockFullSolution);
+  it("shows the code expanded by default and collapses it", () => {
+    render(<ProgressiveCard solution={solution} />);
 
-    render(<ProgressiveCard />);
+    const row = screen.getByTestId("answer-code-row");
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(regionOf(row).hasAttribute("hidden")).toBe(false);
+    expect(regionOf(row).textContent).toContain("def allow(key):");
 
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
+    fireEvent.click(row);
 
-    // Press Cmd + 1 (browser tab switch) -> should NOT collapse Stage 1
-    fireEvent.keyDown(window, { key: "1", metaKey: true });
-    expect(screen.getByTestId("progressive-stage1-content")).toBeDefined();
-
-    // Press Ctrl + 2 -> should NOT collapse Stage 2
-    fireEvent.keyDown(window, { key: "2", ctrlKey: true });
-    expect(screen.getByTestId("progressive-stage2-content")).toBeDefined();
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(regionOf(row).hasAttribute("hidden")).toBe(true);
   });
 
-  it("renders compact variant with custom testIdPrefix for NotchCompanion", () => {
+  it("shows complexity collapsed by default and expands it to the edge cases", () => {
+    render(<ProgressiveCard solution={solution} />);
+
+    const row = screen.getByTestId("answer-complexity-row");
+    expect(row.textContent).toContain("O(log N) time · O(N) space");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(regionOf(row).hasAttribute("hidden")).toBe(true);
+
+    fireEvent.click(row);
+
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(regionOf(row).hasAttribute("hidden")).toBe(false);
+    expect(screen.getByText("Empty window")).toBeDefined();
+    expect(screen.getByText("Clock skew")).toBeDefined();
+  });
+
+  it("skips list items that are not strings", () => {
+    const messy = {
+      ...solution,
+      stage1Intuition: {
+        verbalSummary: "Summary",
+        keyTradeoffs: ["Real tradeoff", { point: "object" }, 42] as unknown as string[],
+      },
+      stage3Analysis: {
+        timeComplexity: "O(1)",
+        spaceComplexity: "O(1)",
+        edgeCases: [{ case: "object" }, "Real edge"] as unknown as string[],
+      },
+    };
+    render(<ProgressiveCard solution={messy} />);
+    fireEvent.click(screen.getByTestId("answer-complexity-row"));
+
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toEqual(["Real tradeoff", "Real edge"]);
+  });
+
+  it("hides a half-received tag instead of showing it as the summary", () => {
     render(
       <ProgressiveCard
-        solution={mockFullSolution}
-        variant="compact"
-        testIdPrefix="notch"
+        solution={{ ...solution, stage1Intuition: { verbalSummary: "  <verbal_su", keyTradeoffs: [] } }}
       />
     );
 
-    expect(screen.getByTestId("notch-stage1-card")).toBeDefined();
-    expect(screen.getByText("Intuition & Tradeoffs")).toBeDefined();
-    expect(screen.getByTestId("notch-stage2-card")).toBeDefined();
-    expect(screen.getByText("Code Solution")).toBeDefined();
-    expect(screen.getByTestId("notch-stage3-card")).toBeDefined();
-    expect(screen.getByText("Complexity & Edge Cases")).toBeDefined();
+    expect(screen.queryByTestId("answer-summary")).toBeNull();
+    expect(screen.queryByText(/<verbal/)).toBeNull();
   });
 
-  it("renders null gracefully when no stages are available and not streaming", () => {
+  it("renders nothing without a solution", () => {
     const { container } = render(<ProgressiveCard solution={null} />);
     expect(container.firstChild).toBeNull();
   });
 });
 
-describe("CodeBlock Component", () => {
-  it("renders syntax-highlighted code lines with line numbers and language badge", () => {
-    const sampleCode = "def add(a: int, b: int) -> int:\n    return a + b";
+describe("CodeBlock", () => {
+  const python = [
+    "INF = 1e9 + 7",
+    "mask = 0xFF & x",
+    "big = 1_000_000 // 3",
+    's = "a\\"b"',
+  ];
 
-    render(<CodeBlock code={sampleCode} language="python" />);
+  const commentTexts = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".italic"), (el) => el.textContent);
 
-    const block = screen.getByTestId("code-block");
-    expect(block).toBeDefined();
-
-    // Language badge
-    const badge = screen.getByTestId("code-language-badge");
-    expect(badge.textContent).toBe("python");
-
-    // Line numbers
-    expect(screen.getByTestId("line-number-1").textContent).toBe("1");
-    expect(screen.getByTestId("line-number-2").textContent).toBe("2");
-
-    // Syntax-highlighted keywords & types
-    expect(screen.getByText("def").className).toContain("text-purple-400");
-    expect(screen.getByText("return").className).toContain("text-purple-400");
-    const intTokens = screen.getAllByText("int");
-    expect(intTokens[0].className).toContain("text-cyan-300");
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("copies code to clipboard when clicking copy button", async () => {
-    const sampleCode = "const message = 'Hello World';";
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: writeTextMock },
-      configurable: true,
-      writable: true,
-    });
+  it("renders every line of python exactly as written", () => {
+    const { container } = render(<CodeBlock code={python.join("\n")} language="python" />);
 
-    render(<CodeBlock code={sampleCode} language="typescript" />);
-
-    const copyBtn = screen.getByTestId("code-copy-btn");
-    expect(screen.getByText("Copy")).toBeDefined();
-
-    await act(async () => {
-      fireEvent.click(copyBtn);
-    });
-
-    expect(writeTextMock).toHaveBeenCalledWith(sampleCode);
-    expect(screen.getByText("Copied!")).toBeDefined();
+    const lines = container.querySelector("pre")!.textContent!.split("\n");
+    expect(lines).toEqual(python);
   });
 
-  it("copies code to clipboard via Cmd + C keyboard shortcut when focused", async () => {
-    const sampleCode = "fn main() { println!(\"Hello\"); }";
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: writeTextMock },
-      configurable: true,
-      writable: true,
-    });
+  it("does not style python // as a comment but styles # as one", () => {
+    const { container } = render(
+      <CodeBlock code={"mid = (lo + hi) // 2\n# note"} language="python" />
+    );
 
-    render(<CodeBlock code={sampleCode} language="rust" />);
+    expect(commentTexts(container)).toEqual(["# note"]);
+  });
 
-    const block = screen.getByTestId("code-block");
+  it("styles // as a comment in javascript", () => {
+    const { container } = render(<CodeBlock code="const x = 1; // note" language="javascript" />);
 
-    await act(async () => {
-      fireEvent.keyDown(block, { key: "c", metaKey: true });
-    });
+    expect(commentTexts(container)).toEqual(["// note"]);
+  });
 
-    expect(writeTextMock).toHaveBeenCalledWith(sampleCode);
-    expect(screen.getByText("Copied!")).toBeDefined();
+  it("shows Copied only after the clipboard write resolves", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<CodeBlock code="x = 1" language="python" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await screen.findByText("Copied");
+    expect(writeText).toHaveBeenCalledWith("x = 1");
+  });
+
+  it("keeps the Copy label when the clipboard write fails", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<CodeBlock code="x = 1" language="python" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(screen.queryByText("Copied")).toBeNull();
+  });
+
+  it("keeps the Copy label when the clipboard API is missing", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    render(<CodeBlock code="x = 1" language="python" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await act(async () => {});
+
+    expect(screen.queryByText("Copied")).toBeNull();
   });
 });
 
-describe("ComplexityBadge Component", () => {
-  it("renders both Time and Space complexity badges", () => {
-    render(
-      <ComplexityBadge timeComplexity="O(log N)" spaceComplexity="O(1)" />
-    );
-
-    const timeBadge = screen.getByTestId("complexity-badge-time");
-    const spaceBadge = screen.getByTestId("complexity-badge-space");
-
-    expect(timeBadge.textContent).toBe("Time: O(log N)");
-    expect(spaceBadge.textContent).toBe("Space: O(1)");
-    expect(timeBadge.className).toContain("text-amber-300");
-    expect(spaceBadge.className).toContain("text-purple-300");
+describe("AnswerPanel", () => {
+  beforeEach(() => {
+    useSessionStore.getState().clearSession();
+    useAppStore.setState({ isAskOpen: false });
   });
 
-  it("renders individual Time badge when type='time'", () => {
-    render(<ComplexityBadge type="time" complexity="O(N log N)" />);
-
-    expect(screen.getByTestId("complexity-badge-time").textContent).toBe(
-      "Time: O(N log N)"
-    );
-    expect(screen.queryByTestId("complexity-badge-space")).toBeNull();
+  it("renders nothing when there is nothing to show", () => {
+    const { container } = render(<AnswerPanel />);
+    expect(container.firstChild).toBeNull();
   });
 
-  it("renders individual Space badge when type='space'", () => {
-    render(<ComplexityBadge type="space" complexity="O(N)" />);
+  it("shows quick pointers and the Cmd+Enter hint for a detected question", () => {
+    useSessionStore.getState().setActiveQuestion(question);
+    render(<AnswerPanel />);
 
-    expect(screen.getByTestId("complexity-badge-space").textContent).toBe(
-      "Space: O(N)"
+    expect(screen.getByText("Design a rate limiter?")).toBeDefined();
+    expect(screen.getByText("Token bucket")).toBeDefined();
+    expect(screen.getByText("⌘↵")).toBeDefined();
+  });
+
+  it("shows Thinking while solving and the answer above it", () => {
+    useSessionStore.getState().setActiveQuestion(question);
+    useSessionStore.getState().setSolution(solution);
+    useSessionStore.setState({ isSolving: true });
+    render(<AnswerPanel />);
+
+    expect(screen.getByTestId("answer-summary")).toBeDefined();
+    expect(screen.getByText("Thinking…")).toBeDefined();
+  });
+
+  it("shows the error with a Retry that re-dispatches the solve", () => {
+    useSessionStore.getState().setActiveQuestion(question);
+    useSessionStore.setState({ solveError: "Model timed out" });
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
+    render(<AnswerPanel />);
+
+    expect(screen.getByRole("alert").textContent).toContain("Model timed out");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual(question);
+    window.removeEventListener("sidekick:deep_solve", listener);
+  });
+
+  it("close clears the question and solution and closes Ask", () => {
+    useSessionStore.getState().setActiveQuestion(question);
+    useSessionStore.getState().setSolution(solution);
+    useAppStore.setState({ isAskOpen: true });
+    const { container } = render(<AnswerPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(useSessionStore.getState().activeQuestion).toBeNull();
+    expect(useSessionStore.getState().progressiveSolution).toBeNull();
+    expect(useAppStore.getState().isAskOpen).toBe(false);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("a follow-up sets the question, dispatches the solve and clears the input", () => {
+    useAppStore.setState({ isAskOpen: true });
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
+    render(<AnswerPanel />);
+    const input = screen.getByLabelText("Ask a follow-up") as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "  How would you shard it?  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(useSessionStore.getState().activeQuestion?.extractedQuestion).toBe(
+      "How would you shard it?"
     );
-    expect(screen.queryByTestId("complexity-badge-time")).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail.extractedQuestion).toBe(
+      "How would you shard it?"
+    );
+    expect(input.value).toBe("");
+    expect(useAppStore.getState().isAskOpen).toBe(false);
+    window.removeEventListener("sidekick:deep_solve", listener);
+  });
+
+  it("Cmd+Enter also submits a follow-up", () => {
+    useAppStore.setState({ isAskOpen: true });
+    render(<AnswerPanel />);
+    const input = screen.getByLabelText("Ask a follow-up");
+
+    fireEvent.change(input, { target: { value: "Edge cases?" } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+
+    expect(useSessionStore.getState().activeQuestion?.extractedQuestion).toBe("Edge cases?");
+  });
+
+  it("an empty follow-up does nothing", () => {
+    useAppStore.setState({ isAskOpen: true });
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
+    render(<AnswerPanel />);
+
+    const input = screen.getByLabelText("Ask a follow-up");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().activeQuestion).toBeNull();
+    expect(screen.getByText("Ask anything")).toBeDefined();
+    window.removeEventListener("sidekick:deep_solve", listener);
   });
 });

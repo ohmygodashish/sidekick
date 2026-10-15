@@ -1,8 +1,19 @@
 import { create } from "zustand";
-import { safeInvoke, startAudioCapture } from "../lib/ipc";
+import { safeInvoke } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
 
+// "dynamic_notch" now means compact view (bar only); the name is kept for Rust and saved settings.
 export type LayoutMode = "floating_hud" | "dynamic_notch";
+
+export type MeetingStatus = "idle" | "starting" | "live" | "stopping";
+
+const MEETING_IDLE = { meetingStatus: "idle" as MeetingStatus, meetingStartedAt: null };
+
+// Rejects on backend errors inside Tauri; resolves without doing anything in a plain browser or tests.
+async function invokeInTauri(cmd: string, args?: Record<string, unknown>) {
+  const { invoke, isTauri } = await import("@tauri-apps/api/core");
+  if (typeof isTauri === "function" && isTauri()) await invoke(cmd, args);
+}
 
 export interface AppState {
   layoutMode: LayoutMode;
@@ -10,6 +21,10 @@ export interface AppState {
   isClickThrough: boolean; // default false
   isVisible: boolean; // default false
   isPanicked: boolean; // default false
+  meetingStatus: MeetingStatus; // audio is captured only while "live"
+  meetingStartedAt: number | null;
+  meetingError: string | null;
+  isAskOpen: boolean; // answer panel opened by Ask with no detected question
 
   // Actions
   setLayoutMode: (mode: LayoutMode) => Promise<void>;
@@ -17,10 +32,12 @@ export interface AppState {
   setOpacity: (opacity: number) => Promise<void>;
   setClickThrough: (enabled: boolean) => Promise<void>;
   toggleClickThrough: () => Promise<void>;
-  setIsVisible: (visible: boolean) => void;
   triggerPanic: () => Promise<void>;
-  resetPanic: () => void;
   syncFromBackend: () => Promise<void>;
+  startMeeting: () => Promise<void>;
+  stopMeeting: () => Promise<void>;
+  setAskOpen: (open: boolean) => void;
+  hideWindow: () => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -29,6 +46,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   isClickThrough: false,
   isVisible: false,
   isPanicked: false,
+  meetingStatus: "idle",
+  meetingStartedAt: null,
+  meetingError: null,
+  isAskOpen: false,
 
   setLayoutMode: async (mode: LayoutMode) => {
     set({ layoutMode: mode });
@@ -60,21 +81,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     await safeInvoke("set_click_through", { enabled: next });
   },
 
-  setIsVisible: (visible: boolean) => {
-    set({
-      isVisible: visible,
-      ...(visible ? { isPanicked: false } : {}),
-    });
-  },
-
   triggerPanic: async () => {
-    set({ isPanicked: true, isVisible: false });
+    set({ isPanicked: true, isVisible: false, ...MEETING_IDLE });
     await safeInvoke("trigger_panic");
   },
 
-  resetPanic: () => {
-    set({ isPanicked: false });
-    startAudioCapture().catch(() => {});
+  startMeeting: async () => {
+    if (get().meetingStatus !== "idle") return;
+    set({ meetingStatus: "starting", meetingError: null });
+    try {
+      await invokeInTauri("start_audio_capture", { config: null });
+      set({ meetingStatus: "live", meetingStartedAt: Date.now() });
+    } catch (err) {
+      set({ ...MEETING_IDLE, meetingError: String(err) });
+    }
+  },
+
+  stopMeeting: async () => {
+    if (get().meetingStatus !== "live") return;
+    set({ meetingStatus: "stopping" });
+    try {
+      await invokeInTauri("stop_audio_capture");
+      set({ ...MEETING_IDLE, meetingError: null });
+    } catch (err) {
+      // Capture may still be running, so stay live and say so
+      set({ meetingStatus: "live", meetingError: String(err) });
+    }
+  },
+
+  setAskOpen: (open: boolean) => set({ isAskOpen: open }),
+
+  hideWindow: async () => {
+    set({ isVisible: false });
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().hide();
+    } catch {
+      // Outside Tauri there is no window to hide
+    }
   },
 
   syncFromBackend: async () => {
@@ -115,7 +159,8 @@ export async function setupAppEventListeners(): Promise<() => void> {
     const unlistenPanic = await listen<{ action: string; timestamp: number }>(
       "sidekick://panic",
       () => {
-        useAppStore.setState({ isPanicked: true, isVisible: false });
+        // Rust purges and stops audio on panic, so the meeting is over
+        useAppStore.setState({ isPanicked: true, isVisible: false, ...MEETING_IDLE });
       }
     );
     unlisteners.push(unlistenPanic);
@@ -126,39 +171,24 @@ export async function setupAppEventListeners(): Promise<() => void> {
         isVisible: payload.visible,
         ...(payload.visible ? { isPanicked: false } : {}),
       });
-      if (payload.visible) {
-        startAudioCapture().catch(() => {});
-      }
     };
 
-    const unlistenVis1 = await listen<{ visible: boolean }>(
+    const unlistenVis = await listen<{ visible: boolean }>(
       "sidekick://visibility_toggled",
       (e) => handleVisibility(e.payload)
     );
-    unlisteners.push(unlistenVis1);
-
-    const unlistenVis2 = await listen<{ visible: boolean }>(
-      "sidekick://toggle_visibility",
-      (e) => handleVisibility(e.payload)
-    );
-    unlisteners.push(unlistenVis2);
+    unlisteners.push(unlistenVis);
 
     // 3. Click-through toggled event (Cmd + Shift + C)
     const handleClickThrough = (payload: { enabled: boolean }) => {
       useAppStore.setState({ isClickThrough: payload.enabled });
     };
 
-    const unlistenClick1 = await listen<{ enabled: boolean }>(
+    const unlistenClick = await listen<{ enabled: boolean }>(
       "sidekick://click_through_toggled",
       (e) => handleClickThrough(e.payload)
     );
-    unlisteners.push(unlistenClick1);
-
-    const unlistenClick2 = await listen<{ enabled: boolean }>(
-      "sidekick://toggle_click_through",
-      (e) => handleClickThrough(e.payload)
-    );
-    unlisteners.push(unlistenClick2);
+    unlisteners.push(unlistenClick);
 
     // 4. Layout mode toggled event (Cmd + Shift + M)
     const unlistenLayout = await listen<{ mode: string; mode_str?: string }>(
@@ -209,6 +239,8 @@ export async function setupAppEventListeners(): Promise<() => void> {
       "sidekick://session_burned",
       () => {
         useSessionStore.getState().clearSession();
+        // burn_session purges and stops audio capture too
+        useAppStore.setState(MEETING_IDLE);
       }
     );
     unlisteners.push(unlistenBurned);

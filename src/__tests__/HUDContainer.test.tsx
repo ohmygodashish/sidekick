@@ -1,110 +1,202 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { HUDContainer } from "../components/hud/HUDContainer";
 import { useAppStore } from "../store/appStore";
 import { useSessionStore } from "../store/sessionStore";
+import { useSettingsStore } from "../store/settingsStore";
+
+vi.mock("../components/answer/AnswerPanel", () => ({
+  AnswerPanel: () => <div data-testid="answer-panel" />,
+}));
+vi.mock("../components/settings/SettingsDrawer", () => ({
+  SettingsDrawer: () => <div data-testid="settings-drawer" />,
+}));
+
+const question = {
+  questionId: "q_test",
+  timestamp: Date.now(),
+  confidence: 0.99,
+  rawTranscript: "How does raft consensus work?",
+  extractedQuestion: "Explain the Raft consensus algorithm",
+  quickPointers: ["Leader election", "Log replication"],
+};
+
+const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "More options" }));
 
 describe("HUDContainer", () => {
   beforeEach(() => {
     useAppStore.setState({
       layoutMode: "floating_hud",
-      opacity: 0.85,
+      meetingStatus: "idle",
+      meetingStartedAt: null,
+      meetingError: null,
+      isAskOpen: false,
       isClickThrough: false,
-      isVisible: true,
       isPanicked: false,
+      isVisible: true,
     });
     useSessionStore.getState().clearSession();
+    useSettingsStore.setState({ isSettingsOpen: false });
   });
 
-  it("renders with draggable header bar containing data-tauri-drag-region", () => {
-    render(<HUDContainer />);
-
-    const header = screen.getByTestId("hud-header");
-    expect(header).toBeDefined();
-    expect(header.getAttribute("data-tauri-drag-region")).not.toBeNull();
-    expect(screen.getByText("Sidekick")).toBeDefined();
-    expect(screen.getByText("Invisible")).toBeDefined();
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("toggles click-through state when clicking click-through button", () => {
+  it("shows the bar with Start, Ask, Hide and More options", () => {
     render(<HUDContainer />);
 
-    const clickThroughBtn = screen.getByTitle(/Toggle Mouse Click-Through/i);
-    expect(useAppStore.getState().isClickThrough).toBe(false);
+    expect(screen.getByRole("toolbar", { name: "Sidekick controls" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+    expect(screen.getByRole("button", { name: /Ask/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: /Hide/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "More options" })).toBeDefined();
+  });
 
-    fireEvent.click(clickThroughBtn);
+  it("Start goes live, and Stop returns to idle", async () => {
+    render(<HUDContainer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start meeting" }));
+    const stop = await screen.findByRole("button", { name: "Stop meeting" });
+    expect(stop.textContent).toContain("0:00");
+
+    fireEvent.click(stop);
+    await waitFor(() => expect(useAppStore.getState().meetingStatus).toBe("idle"));
+    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+  });
+
+  it("live timer counts up every second and uses h:mm:ss after an hour", () => {
+    vi.useFakeTimers();
+    useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() - 65_000 });
+    render(<HUDContainer />);
+
+    const stop = () => screen.getByRole("button", { name: "Stop meeting" });
+    expect(stop().textContent).toContain("1:05");
+
+    act(() => vi.advanceTimersByTime(2000));
+    expect(stop().textContent).toContain("1:07");
+
+    useAppStore.setState({ meetingStartedAt: Date.now() - 3_722_000 });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(stop().textContent).toContain("1:02:03");
+  });
+
+  it("Ask with no detected question opens the answer panel", () => {
+    render(<HUDContainer />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
+    expect(useAppStore.getState().isAskOpen).toBe(true);
+  });
+
+  it("Ask with a detected question starts a solve for it", () => {
+    useSessionStore.getState().setActiveQuestion(question);
+    const stored = useSessionStore.getState().activeQuestion;
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
+
+    render(<HUDContainer />);
+    fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
+
+    window.removeEventListener("sidekick:deep_solve", listener);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual(stored);
+  });
+
+  it("compact view hides the answer panel, and Ask brings it back", () => {
+    useAppStore.setState({ layoutMode: "dynamic_notch" });
+    render(<HUDContainer />);
+    expect(screen.queryByTestId("answer-panel")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
+    expect(useAppStore.getState().layoutMode).toBe("floating_hud");
+    expect(screen.getByTestId("answer-panel")).toBeDefined();
+  });
+
+  it("settings replace the answer panel, and Ask closes settings", () => {
+    useSettingsStore.setState({ isSettingsOpen: true });
+    render(<HUDContainer />);
+    expect(screen.getByTestId("settings-drawer")).toBeDefined();
+    expect(screen.queryByTestId("answer-panel")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
+    expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
+    expect(screen.getByTestId("answer-panel")).toBeDefined();
+  });
+
+  it("shows an alert when the meeting failed to start", () => {
+    useAppStore.setState({ meetingError: "Permission denied" });
+    render(<HUDContainer />);
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't start listening");
+    expect(alert.getAttribute("title")).toBe("Permission denied");
+  });
+
+  it("More options menu toggles compact view, click-through and settings", () => {
+    render(<HUDContainer />);
+
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Compact view/ }));
+    expect(useAppStore.getState().layoutMode).toBe("dynamic_notch");
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    openMenu();
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: /Compact view/ }).getAttribute("aria-checked")
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Click-through/ }));
     expect(useAppStore.getState().isClickThrough).toBe(true);
 
-    fireEvent.click(clickThroughBtn);
-    expect(useAppStore.getState().isClickThrough).toBe(false);
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Settings/ }));
+    expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("toggles layout mode between floating HUD and dynamic notch", () => {
+  it("opening the menu focuses its first item", () => {
     render(<HUDContainer />);
-
-    const layoutBtn = screen.getByTitle(/Toggle Floating HUD \/ Dynamic Notch/i);
-    expect(useAppStore.getState().layoutMode).toBe("floating_hud");
-
-    fireEvent.click(layoutBtn);
-    expect(useAppStore.getState().layoutMode).toBe("dynamic_notch");
-
-    fireEvent.click(layoutBtn);
-    expect(useAppStore.getState().layoutMode).toBe("floating_hud");
+    openMenu();
+    expect(document.activeElement).toBe(
+      screen.getByRole("menuitemcheckbox", { name: /Compact view/ })
+    );
   });
 
-  it("triggers panic mode and renders panic alert banner", () => {
+  it("arrow keys move focus through the menu items and wrap around", () => {
     render(<HUDContainer />);
+    openMenu();
+    const compact = screen.getByRole("menuitemcheckbox", { name: /Compact view/ });
+    const clickThrough = screen.getByRole("menuitemcheckbox", { name: /Click-through/ });
+    const panic = screen.getByRole("menuitem", { name: /Panic/ });
+    const press = (key: string) => fireEvent.keyDown(document.activeElement as HTMLElement, { key });
 
-    const panicBtn = screen.getByTitle(/Instant Panic Killswitch/i);
-    fireEvent.click(panicBtn);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(clickThrough);
 
-    expect(useAppStore.getState().isPanicked).toBe(true);
-    expect(screen.getByText(/Panic Mode Engaged/i)).toBeDefined();
-    expect(screen.getByText("Panicked")).toBeDefined();
+    press("ArrowUp");
+    expect(document.activeElement).toBe(compact);
 
-    // Clicking resume should restore state
-    const resumeBtn = screen.getByText("Resume Copilot");
-    fireEvent.click(resumeBtn);
-    expect(useAppStore.getState().isPanicked).toBe(false);
+    press("ArrowUp");
+    expect(document.activeElement).toBe(panic);
+
+    press("ArrowDown");
+    expect(document.activeElement).toBe(compact);
   });
 
-  it("renders live detected question when available in sessionStore", () => {
-    useSessionStore.getState().setActiveQuestion({
-      questionId: "q_test",
-      timestamp: Date.now(),
-      confidence: 0.99,
-      rawTranscript: "How does raft consensus work?",
-      extractedQuestion: "Explain the Raft consensus algorithm",
-      quickPointers: ["Leader election", "Log replication", "Heartbeats"],
-    });
-
+  it("Escape closes the menu and returns focus to the trigger", () => {
     render(<HUDContainer />);
+    const trigger = screen.getByRole("button", { name: "More options" });
+    openMenu();
 
-    expect(screen.getByText("Live Detected Question")).toBeDefined();
-    expect(screen.getByText("Explain the Raft consensus algorithm")).toBeDefined();
-    expect(screen.getByText("Leader election")).toBeDefined();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 
-  it("renders progressive solution stages when present in sessionStore", () => {
-    useSessionStore.getState().setSolution({
-      stage1Intuition: {
-        verbalSummary: "Raft decomposes consensus into leader election and log replication.",
-        keyTradeoffs: ["Easier to understand than Paxos"],
-      },
-      stage2Code: {
-        language: "rust",
-        code: "fn handle_append_entries() { ... }",
-        explanation: "Handles incoming RPCs",
-      },
-      stage3Analysis: null,
-    });
-
+  it("pointer-down outside the menu closes it", () => {
     render(<HUDContainer />);
+    openMenu();
 
-    expect(screen.getByText("Stage 1: Intuition & Tradeoffs")).toBeDefined();
-    expect(
-      screen.getByText(/Raft decomposes consensus into leader election/)
-    ).toBeDefined();
-    expect(screen.getByText("Stage 2: Code (rust)")).toBeDefined();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

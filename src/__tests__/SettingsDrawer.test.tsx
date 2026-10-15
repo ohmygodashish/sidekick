@@ -1,468 +1,399 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { SettingsDrawer } from "../components/settings/SettingsDrawer";
-import { HUDContainer } from "../components/hud/HUDContainer";
-import { NotchCompanion } from "../components/hud/NotchCompanion";
 import { useSettingsStore } from "../store/settingsStore";
 import { useSessionStore } from "../store/sessionStore";
-import { useAppStore } from "../store/appStore";
 import * as ipc from "../lib/ipc";
 
-describe("SettingsDrawer & Personalization Manager", () => {
+function providerRow(name: string): HTMLElement {
+  return screen.getByRole("heading", { name }).closest("div.rounded-lg") as HTMLElement;
+}
+
+function openTab(name: string) {
+  fireEvent.click(screen.getByRole("tab", { name }));
+}
+
+describe("SettingsDrawer", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     useSettingsStore.getState().resetSettings();
     useSessionStore.getState().clearSession();
-    useAppStore.setState({
-      layoutMode: "floating_hud",
-      opacity: 0.85,
-      isClickThrough: false,
-      isVisible: true,
-      isPanicked: false,
-    });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  describe("Access Control & Drawer Visibility (REQ-002)", () => {
-    it("does not render when isSettingsOpen is false", () => {
-      useSettingsStore.setState({ isSettingsOpen: false });
-      render(<SettingsDrawer />);
-
-      expect(screen.queryByTestId("settings-drawer")).toBeNull();
-      expect(screen.queryByTestId("settings-backdrop")).toBeNull();
+  describe("panel shell", () => {
+    it("renders nothing when closed", () => {
+      const { container } = render(<SettingsDrawer isOpen={false} />);
+      expect(container.firstChild).toBeNull();
     });
 
-    it("renders modal and sheet when isSettingsOpen is true", () => {
-      useSettingsStore.setState({ isSettingsOpen: true });
-      render(<SettingsDrawer />);
+    it("renders an inline dialog with four tabs, Keys selected by default", () => {
+      render(<SettingsDrawer isOpen={true} />);
 
-      expect(screen.getByTestId("settings-drawer")).toBeDefined();
-      expect(screen.getByTestId("settings-backdrop")).toBeDefined();
-      expect(screen.getByText("Settings & Personalization")).toBeDefined();
+      expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Danger"]);
+      expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("true");
     });
 
-    it("closes drawer when clicking close button", () => {
-      useSettingsStore.setState({ isSettingsOpen: true });
-      render(<SettingsDrawer />);
+    it("switches tabs and marks the selected one", () => {
+      render(<SettingsDrawer isOpen={true} />);
 
-      const closeBtn = screen.getByTestId("close-settings-btn");
-      fireEvent.click(closeBtn);
+      openTab("Profile");
+      expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByText("Changes save automatically.")).toBeDefined();
 
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
+      openTab("Audio");
+      expect(screen.getByRole("radiogroup", { name: "Speech-to-text engine" })).toBeDefined();
+
+      openTab("Danger");
+      expect(screen.getByText("These can't be undone.")).toBeDefined();
     });
 
-    it("closes drawer when clicking backdrop overlay", () => {
-      useSettingsStore.setState({ isSettingsOpen: true });
-      render(<SettingsDrawer />);
-
-      const backdrop = screen.getByTestId("settings-backdrop");
-      fireEvent.click(backdrop);
-
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
+    it("moves focus to the selected tab when it opens", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+      expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Profile" }));
     });
 
-    it("closes drawer when pressing Escape key, but preserves drawer on Cmd+Escape (panic key)", () => {
-      useSettingsStore.setState({ isSettingsOpen: true });
-      render(<SettingsDrawer />);
+    it("moves between tabs with the arrow keys", () => {
+      render(<SettingsDrawer isOpen={true} />);
+      const keysTab = screen.getByRole("tab", { name: "Keys" });
 
-      // Cmd + Escape should NOT close settings drawer (reserved for Panic)
+      fireEvent.keyDown(keysTab, { key: "ArrowRight" });
+      expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
+
+      fireEvent.keyDown(screen.getByRole("tab", { name: "Profile" }), { key: "ArrowLeft" });
+      fireEvent.keyDown(screen.getByRole("tab", { name: "Keys" }), { key: "ArrowLeft" });
+      expect(screen.getByRole("tab", { name: "Danger" }).getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("closes on the close button", () => {
+      const onClose = vi.fn();
+      render(<SettingsDrawer isOpen={true} onClose={onClose} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes on Escape but leaves Cmd+Escape for the panic shortcut", () => {
+      const onClose = vi.fn();
+      render(<SettingsDrawer isOpen={true} onClose={onClose} />);
+
       fireEvent.keyDown(window, { key: "Escape", metaKey: true });
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
+      expect(onClose).not.toHaveBeenCalled();
 
-      // Plain Escape closes settings drawer
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the store-driven panel on Escape", () => {
+      useSettingsStore.setState({ isSettingsOpen: true });
+      render(<SettingsDrawer />);
+
       fireEvent.keyDown(window, { key: "Escape" });
       expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
     });
 
-    it("opens settings when clicking settings button in HUDContainer", () => {
-      useSettingsStore.setState({ isSettingsOpen: false });
-      render(<HUDContainer />);
-
-      const settingsBtn = screen.getByTestId("hud-settings-btn");
-      fireEvent.click(settingsBtn);
-
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
-    });
-
-    it("opens settings when clicking settings button in NotchCompanion", () => {
-      useSettingsStore.setState({ isSettingsOpen: false });
-      render(<NotchCompanion />);
-
-      const notchSettingsBtn = screen.getByTestId("notch-settings-btn");
-      fireEvent.click(notchSettingsBtn);
-
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
-    });
-  });
-
-  describe("Tab Navigation", () => {
-    it("switches cleanly across all 4 tabbed sections", () => {
+    it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      // Default tab: keys
-      expect(screen.getByTestId("api-key-inputs")).toBeDefined();
-
-      // Click profile tab
-      fireEvent.click(screen.getByTestId("tab-profile"));
-      expect(screen.getByTestId("profile-editor")).toBeDefined();
-
-      // Click audio tab
-      fireEvent.click(screen.getByTestId("tab-audio"));
-      expect(screen.getByTestId("audio-settings")).toBeDefined();
-
-      // Click danger zone tab
-      fireEvent.click(screen.getByTestId("tab-danger"));
-      expect(screen.getByTestId("danger-zone")).toBeDefined();
-
-      // Back to keys tab
-      fireEvent.click(screen.getByTestId("tab-keys"));
-      expect(screen.getByTestId("api-key-inputs")).toBeDefined();
+      for (const name of ["Keys", "Profile", "Audio", "Danger"]) {
+        openTab(name);
+        expect(screen.getByRole("dialog").textContent).not.toMatch(
+          /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
+        );
+      }
     });
   });
 
-  describe("Multi-Provider API Keys & Models (REQ-016, SEC-001)", () => {
-    it("renders all 6 supported LLM and STT providers with masked inputs", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      const providers = ["openrouter", "anthropic", "openai", "gemini", "groq", "deepgram"];
-      providers.forEach((p) => {
-        const input = screen.getByTestId(`input-${p}`) as HTMLInputElement;
-        expect(input).toBeDefined();
-        expect(input.type).toBe("password");
-        expect(screen.getByTestId(`toggle-visibility-${p}`)).toBeDefined();
-        expect(screen.getByTestId(`test-btn-${p}`)).toBeDefined();
-      });
-    });
-
-    it("toggles input visibility between masked password and plaintext", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      const input = screen.getByTestId("input-openai") as HTMLInputElement;
-      const toggleBtn = screen.getByTestId("toggle-visibility-openai");
-
-      expect(input.type).toBe("password");
-
-      // Click peek
-      fireEvent.click(toggleBtn);
-      expect(input.type).toBe("text");
-
-      // Click hide
-      fireEvent.click(toggleBtn);
-      expect(input.type).toBe("password");
-    });
-
-    it("updates API keys in in-memory store upon typing", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      const input = screen.getByTestId("input-anthropic") as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "sk-ant-api03-test-token-12345" } });
-
-      expect(useSettingsStore.getState().apiKeys.anthropic).toBe(
-        "sk-ant-api03-test-token-12345"
-      );
-    });
-
-    it("performs format validation and reports error on invalid/empty keys", async () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      // Test with empty key
-      const testBtn = screen.getByTestId("test-btn-openrouter");
-      fireEvent.click(testBtn);
-
-      await waitFor(() => {
-        const status = screen.getByTestId("status-openrouter");
-        expect(status.textContent).toContain("API key is required");
-      });
-
-      // Test with invalid prefix
-      const input = screen.getByTestId("input-openrouter");
-      fireEvent.change(input, { target: { value: "bad-prefix-key" } });
-      fireEvent.click(testBtn);
-
-      await waitFor(() => {
-        const status = screen.getByTestId("status-openrouter");
-        expect(status.textContent).toContain("Must start with sk-or-");
-      });
-    });
-
-    it("performs format validation and reports success on valid format keys", async () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      const input = screen.getByTestId("input-groq");
-      fireEvent.change(input, { target: { value: "gsk_valid_test_key_sample_789" } });
-
-      const testBtn = screen.getByTestId("test-btn-groq");
-      fireEvent.click(testBtn);
-
-      await waitFor(() => {
-        const status = screen.getByTestId("status-groq");
-        expect(status.textContent).toContain("Groq key format verified");
-      });
-    });
-
-    it("persists keys to backend via store_api_key when clicking Save API Keys", async () => {
+  describe("Keys tab", () => {
+    it("saves keys to the backend and shows Saved", async () => {
       const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
-
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      fireEvent.change(screen.getByTestId("input-openai"), {
+      fireEvent.change(screen.getByLabelText("OpenAI API key"), {
         target: { value: "sk-proj-valid-openai-key" },
       });
 
-      const saveBtn = screen.getByTestId("save-keys-btn");
       await act(async () => {
-        fireEvent.click(saveBtn);
+        fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
       });
 
       expect(spyInvoke).toHaveBeenCalledWith("store_api_key", {
         provider: "openai",
         key: "sk-proj-valid-openai-key",
       });
-      // Cleared/empty keys must also be propagated to prevent stale persistence
-      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", {
-        provider: "anthropic",
-        key: "",
-      });
-
-      expect(screen.getByText("Saved!")).toBeDefined();
+      // Cleared keys are propagated too, so deleted keys are wiped in the backend
+      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "anthropic", key: "" });
+      expect(screen.getByText("Saved")).toBeDefined();
     });
 
-    it("allows selecting provider and customizing models", () => {
+    it("checks the key format only and never calls the backend", () => {
+      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      const providerSelect = screen.getByTestId("selected-provider-select") as HTMLSelectElement;
-      fireEvent.change(providerSelect, { target: { value: "anthropic" } });
+      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
+        target: { value: "sk-ant-api03-test" },
+      });
+      fireEvent.click(within(providerRow("Anthropic")).getByRole("button", { name: "Check format" }));
+      expect(within(providerRow("Anthropic")).getByText("Format looks right")).toBeDefined();
+
+      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
+        target: { value: "bad-prefix-key" },
+      });
+      fireEvent.click(within(providerRow("Anthropic")).getByRole("button", { name: "Check format" }));
+      expect(
+        within(providerRow("Anthropic")).getByText("Invalid key format: Must start with sk-ant-")
+      ).toBeDefined();
+
+      expect(spyInvoke).not.toHaveBeenCalled();
+    });
+
+    it("reports an empty key as required", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(within(providerRow("Groq")).getByRole("button", { name: "Check format" }));
+      expect(within(providerRow("Groq")).getByText("API key is required")).toBeDefined();
+    });
+
+    it("toggles a key between hidden and visible", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      const input = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
+      expect(input.type).toBe("password");
+
+      fireEvent.click(within(providerRow("OpenAI")).getByRole("button", { name: "Show key" }));
+      expect(input.type).toBe("text");
+
+      fireEvent.click(within(providerRow("OpenAI")).getByRole("button", { name: "Hide key" }));
+      expect(input.type).toBe("password");
+    });
+
+    it("stores typed keys in the store and selects provider and models", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
+        target: { value: "sk-ant-api03-test-token-12345" },
+      });
+      expect(useSettingsStore.getState().apiKeys.anthropic).toBe("sk-ant-api03-test-token-12345");
+
+      fireEvent.change(screen.getByLabelText("Primary provider"), { target: { value: "anthropic" } });
       expect(useSettingsStore.getState().selectedProvider).toBe("anthropic");
 
-      const modelInput = screen.getByTestId("selected-model-input") as HTMLInputElement;
-      fireEvent.change(modelInput, { target: { value: "anthropic/claude-3.5-opus" } });
-      expect(useSettingsStore.getState().selectedModel).toBe("anthropic/claude-3.5-opus");
+      fireEvent.change(screen.getByLabelText("Solution model"), {
+        target: { value: "anthropic/claude-x" },
+      });
+      expect(useSettingsStore.getState().selectedModel).toBe("anthropic/claude-x");
 
-      const evaluatorInput = screen.getByTestId("evaluator-model-input") as HTMLInputElement;
-      fireEvent.change(evaluatorInput, { target: { value: "groq/llama-3.1-8b-instant" } });
-      expect(useSettingsStore.getState().evaluatorModel).toBe("groq/llama-3.1-8b-instant");
+      fireEvent.change(screen.getByLabelText("Evaluator model (fast)"), {
+        target: { value: "groq/some-model" },
+      });
+      expect(useSettingsStore.getState().evaluatorModel).toBe("groq/some-model");
     });
   });
 
-  describe("Profile & Personalization Context", () => {
-    it("updates target company and job description fields", () => {
+  describe("Profile tab", () => {
+    it("updates the target company", () => {
       render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
 
-      const companyInput = screen.getByTestId("target-company-input");
-      fireEvent.change(companyInput, { target: { value: "Stripe" } });
+      fireEvent.change(screen.getByLabelText("Target company"), { target: { value: "Stripe" } });
       expect(useSettingsStore.getState().profile.targetCompany).toBe("Stripe");
-
-      const jdInput = screen.getByTestId("job-description-input");
-      fireEvent.change(jdInput, {
-        target: { value: "Staff Infrastructure Engineer - Global Payments Engine" },
-      });
-      expect(useSettingsStore.getState().profile.jobDescription).toContain(
-        "Global Payments Engine"
-      );
     });
 
-    it("updates resume text directly via textarea and handles clear", () => {
+    it("selects each of the five tones, including the default balanced", () => {
+      useSettingsStore.getState().setTone("staff");
       render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
 
-      const textarea = screen.getByTestId("resume-textarea");
-      fireEvent.change(textarea, {
-        target: { value: "10+ years designing distributed storage and consensus protocols." },
+      const expected: [RegExp, string][] = [
+        [/^Concise/, "concise"],
+        [/^Balanced/, "balanced"],
+        [/^Deep/, "deep"],
+        [/^Staff/, "staff"],
+        [/^Architect/, "system_architect"],
+      ];
+      const toneGroup = screen.getByRole("radiogroup", { name: "Tone" });
+      for (const [name, tone] of expected) {
+        fireEvent.click(within(toneGroup).getByRole("radio", { name }));
+        expect(useSettingsStore.getState().profile.tonePreset).toBe(tone);
+        expect(within(toneGroup).getByRole("radio", { name }).getAttribute("aria-checked")).toBe("true");
+      }
+    });
+
+    it("selects a seniority level", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Staff" }));
+      expect(useSettingsStore.getState().profile.seniorityPreset).toBe("staff");
+    });
+
+    it("accepts a .txt resume through the file input", async () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      const input = screen.getByLabelText(/drop a file/i) as HTMLInputElement;
+      expect(input.accept).toBe(".txt,.md");
+
+      const file = new File(["Senior engineer, Raft and Kubernetes."], "resume.txt", {
+        type: "text/plain",
+      });
+      await act(async () => {
+        fireEvent.change(input, { target: { files: [file] } });
       });
 
-      expect(useSettingsStore.getState().profile.resumeText).toContain(
-        "distributed storage"
-      );
+      await waitFor(() => {
+        expect(useSettingsStore.getState().profile.resumeText).toContain("Raft and Kubernetes");
+      });
+    });
 
-      // Clear button should be visible when text is present
-      const clearBtn = screen.getByTestId("clear-resume-btn");
-      fireEvent.click(clearBtn);
+    it("accepts a dropped .md resume", async () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
 
+      const zone = screen.getByLabelText(/drop a file/i).closest("label") as HTMLElement;
+      const file = new File(["# Experience"], "resume.md", { type: "text/markdown" });
+      await act(async () => {
+        fireEvent.drop(zone, { dataTransfer: { files: [file] } });
+      });
+
+      await waitFor(() => {
+        expect(useSettingsStore.getState().profile.resumeText).toBe("# Experience");
+      });
+    });
+
+    it("rejects a PDF with a message and leaves the resume text unchanged", async () => {
+      useSettingsStore.getState().setProfile({ resumeText: "Existing resume" });
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      const pdf = new File(["%PDF-1.4 binary"], "resume.pdf", { type: "application/pdf" });
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText(/drop a file/i), { target: { files: [pdf] } });
+      });
+
+      expect(
+        screen.getByText("Only .txt and .md files are supported. Paste the text instead.")
+      ).toBeDefined();
+      expect(useSettingsStore.getState().profile.resumeText).toBe("Existing resume");
+    });
+
+    it("rejects a file over 200 KB and leaves the resume text unchanged", async () => {
+      useSettingsStore.getState().setProfile({ resumeText: "Existing resume" });
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      const big = new File(["a".repeat(200 * 1024 + 1)], "big.txt", { type: "text/plain" });
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText(/drop a file/i), { target: { files: [big] } });
+      });
+
+      expect(
+        screen.getByText("That file is too large. Paste the relevant part instead.")
+      ).toBeDefined();
+      expect(useSettingsStore.getState().profile.resumeText).toBe("Existing resume");
+    });
+
+    it("clears the resume text", () => {
+      useSettingsStore.getState().setProfile({ resumeText: "Some resume" });
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
       expect(useSettingsStore.getState().profile.resumeText).toBe("");
     });
-
-    it("handles resume file drop and extracts content", async () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
-
-      const dropzone = screen.getByTestId("resume-dropzone");
-
-      const mockFile = new File(
-        ["Senior Staff Engineer with deep expertise in Raft and Kubernetes."],
-        "resume.txt",
-        { type: "text/plain" }
-      );
-
-      await act(async () => {
-        fireEvent.drop(dropzone, {
-          dataTransfer: {
-            files: [mockFile],
-          },
-        });
-      });
-
-      await waitFor(() => {
-        expect(useSettingsStore.getState().profile.resumeText).toContain(
-          "Senior Staff Engineer with deep expertise"
-        );
-      });
-    });
-
-    it("handles binary PDF drop safely with formatted note instead of binary bytecode", async () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
-
-      const dropzone = screen.getByTestId("resume-dropzone");
-
-      const mockPdf = new File(["%PDF-1.4 raw binary bytecode"], "resume.pdf", {
-        type: "application/pdf",
-      });
-
-      await act(async () => {
-        fireEvent.drop(dropzone, {
-          dataTransfer: {
-            files: [mockPdf],
-          },
-        });
-      });
-
-      await waitFor(() => {
-        const text = useSettingsStore.getState().profile.resumeText;
-        expect(text).toContain("[PDF File Attached: resume.pdf");
-        expect(text).not.toContain("%PDF-1.4");
-      });
-    });
-
-    it("selects Staff Engineer, Concise 3 Bullets, and System Architect tone presets", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
-
-      // 1. Staff Engineer
-      const staffCard = screen.getByTestId("tone-staff");
-      fireEvent.click(staffCard);
-      expect(useSettingsStore.getState().profile.tonePreset).toBe("staff");
-
-      // 2. Concise 3 Bullets
-      const conciseCard = screen.getByTestId("tone-concise");
-      fireEvent.click(conciseCard);
-      expect(useSettingsStore.getState().profile.tonePreset).toBe("concise");
-
-      // 3. System Architect
-      const architectCard = screen.getByTestId("tone-architect");
-      fireEvent.click(architectCard);
-      expect(useSettingsStore.getState().profile.tonePreset).toBe("system_architect");
-    });
-
-    it("updates seniority presets (junior, mid, senior, staff, principal)", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
-
-      fireEvent.click(screen.getByTestId("seniority-staff"));
-      expect(useSettingsStore.getState().profile.seniorityPreset).toBe("staff");
-
-      fireEvent.click(screen.getByTestId("seniority-principal"));
-      expect(useSettingsStore.getState().profile.seniorityPreset).toBe("principal");
-    });
-
-    it("provides save confirmation feedback", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
-
-      const saveBtn = screen.getByTestId("save-profile-btn");
-      fireEvent.click(saveBtn);
-
-      expect(screen.getByText("Profile Saved!")).toBeDefined();
-    });
   });
 
-  describe("Audio & Transcription Engine Settings", () => {
-    it("switches STT engine between Embedded Whisper, Groq, and Deepgram", () => {
+  describe("Audio tab", () => {
+    it("switches the speech-to-text engine", () => {
       render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
-
-      // Initially default: whisper_local
       expect(useSettingsStore.getState().sttMode).toBe("whisper_local");
 
-      // Switch to Groq
-      fireEvent.click(screen.getByTestId("stt-groq"));
+      fireEvent.click(screen.getByRole("radio", { name: /Groq cloud/ }));
       expect(useSettingsStore.getState().sttMode).toBe("groq");
+      expect(screen.getByRole("radio", { name: /Groq cloud/ }).getAttribute("aria-checked")).toBe("true");
 
-      // Switch to Deepgram
-      fireEvent.click(screen.getByTestId("stt-deepgram"));
+      fireEvent.click(screen.getByRole("radio", { name: /Deepgram streaming/ }));
       expect(useSettingsStore.getState().sttMode).toBe("deepgram");
 
-      // Switch back to Embedded Whisper
-      fireEvent.click(screen.getByTestId("stt-whisper-local"));
+      fireEvent.click(screen.getByRole("radio", { name: /On this Mac/ }));
       expect(useSettingsStore.getState().sttMode).toBe("whisper_local");
+    });
+
+    it("shows a failure message when the model download fails", async () => {
+      vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+      expect(screen.getByText("Local speech model (tiny, about 75 MB)")).toBeDefined();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Download model" }));
+      });
+
+      expect(screen.getByText("Download failed. Check your connection.")).toBeDefined();
+      expect(screen.queryByText(/ggml/)).toBeNull();
     });
   });
 
-  describe("Danger Zone & Burn Session (REQ-017)", () => {
-    it("eradicates session store, calls burn_session IPC command, and displays feedback", async () => {
+  describe("Danger tab", () => {
+    it("burns the session only on the second click and clears it after the confirm times out", async () => {
       const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
-
-      // Seed session store with active interview state
       useSessionStore.getState().addTranscriptTurn({
         speaker: "interviewer",
         text: "Tell me about Paxos vs Raft.",
         timestamp: Date.now(),
       });
-      useSessionStore.getState().setActiveQuestion({
-        questionId: "q_destroy_test",
-        timestamp: Date.now(),
-        confidence: 0.99,
-        extractedQuestion: "Paxos vs Raft consensus tradeoffs",
-        quickPointers: ["Leader election", "Simplicity"],
-        rawTranscript: "Tell me about Paxos",
-      });
-      useSessionStore.getState().setSolution({
-        stage1Intuition: {
-          verbalSummary: "Raft is strictly decomposed for comprehensibility.",
-          keyTradeoffs: ["Understandability vs Paxos general topology"],
-        },
-        stage2Code: null,
-        stage3Analysis: null,
-      });
-
-      expect(useSessionStore.getState().transcript.length).toBe(1);
-      expect(useSessionStore.getState().activeQuestion).not.toBeNull();
-      expect(useSessionStore.getState().stage1Intuition).not.toBeNull();
-
       render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
 
-      const burnBtn = screen.getByTestId("burn-session-btn");
+      fireEvent.click(screen.getByRole("button", { name: "Burn" }));
+      expect(screen.getByRole("button", { name: "Click again to burn" })).toBeDefined();
+      expect(useSessionStore.getState().transcript.length).toBe(1);
+      expect(spyInvoke).not.toHaveBeenCalledWith("burn_session");
 
       await act(async () => {
-        fireEvent.click(burnBtn);
+        fireEvent.click(screen.getByRole("button", { name: "Click again to burn" }));
       });
 
-      // 1. Session store must be completely wiped
       expect(useSessionStore.getState().transcript.length).toBe(0);
-      expect(useSessionStore.getState().activeQuestion).toBeNull();
-      expect(useSessionStore.getState().stage1Intuition).toBeNull();
-      expect(useSessionStore.getState().stage2Code).toBeNull();
-      expect(useSessionStore.getState().stage3Analysis).toBeNull();
-
-      // 2. safeInvoke('burn_session') must have been dispatched
       expect(spyInvoke).toHaveBeenCalledWith("burn_session");
-
-      // 3. Visual feedback banner displayed
-      const feedback = screen.getByTestId("burn-session-feedback");
-      expect(feedback.textContent).toContain("Session Burned");
+      expect(screen.getByText("Session cleared")).toBeDefined();
     });
 
-    it("resets all settings to default values", () => {
-      useSettingsStore.getState().setSeniority("principal");
-      useSettingsStore.getState().setSttMode("deepgram");
-      useSettingsStore.getState().setSelectedModel("gpt-4o-custom");
-
+    it("drops the burn confirm after 3 seconds", () => {
+      vi.useFakeTimers();
       render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
 
-      const resetBtn = screen.getByTestId("reset-settings-btn");
-      fireEvent.click(resetBtn);
+      fireEvent.click(screen.getByRole("button", { name: "Burn" }));
+      expect(screen.getByRole("button", { name: "Click again to burn" })).toBeDefined();
+
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByRole("button", { name: "Burn" })).toBeDefined();
+    });
+
+    it("resets settings only on the second click", async () => {
+      vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      useSettingsStore.getState().setSeniority("principal");
+      useSettingsStore.getState().setSelectedModel("custom-model");
+      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+      expect(useSettingsStore.getState().selectedModel).toBe("custom-model");
+
+      fireEvent.click(screen.getByRole("button", { name: "Click again to reset" }));
 
       const state = useSettingsStore.getState();
       expect(state.profile.seniorityPreset).toBe("senior");
-      expect(state.sttMode).toBe("whisper_local");
       expect(state.selectedModel).toBe("anthropic/claude-3.5-sonnet");
+      expect(screen.getByText("Settings reset")).toBeDefined();
+    });
 
-      expect(screen.getByTestId("reset-feedback")).toBeDefined();
+    it("drops the reset confirm after 3 seconds", () => {
+      vi.useFakeTimers();
+      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByRole("button", { name: "Reset" })).toBeDefined();
     });
   });
 });

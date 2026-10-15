@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect } from "react";
 import { useSessionStore, DetectedQuestion, ProgressiveSolution } from "../store/sessionStore";
 import { useSettingsStore, ApiProvider } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
@@ -22,13 +22,19 @@ export interface UseDeepSolverOptions {
   enabled?: boolean;
 }
 
+// Solve status lives in sessionStore so any component can render it.
+const setIsSolving = (isSolving: boolean) => useSessionStore.setState({ isSolving });
+const setStreamingStage = (streamingStage: 1 | 2 | 3 | null) =>
+  useSessionStore.setState({ streamingStage });
+const setError = (solveError: string | null) => useSessionStore.setState({ solveError });
+
 export function useDeepSolver(options?: UseDeepSolverOptions) {
   const { onStart, onProgress, onComplete, onError, onCancel, enabled = true } =
     options || {};
 
-  const [isSolving, setIsSolving] = useState(false);
-  const [streamingStage, setStreamingStage] = useState<1 | 2 | 3 | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const isSolving = useSessionStore((s) => s.isSolving);
+  const streamingStage = useSessionStore((s) => s.streamingStage);
+  const error = useSessionStore((s) => s.solveError);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isSolvingRef = useRef(false);
@@ -61,11 +67,6 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
       if (useAppStore.getState().isPanicked) {
         cancelSolve();
         return;
-      }
-
-      // If already solving, cancel previous in-flight stream
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
       }
 
       // Resolve question object and text
@@ -108,6 +109,13 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
       }
       lastSolveTimeRef.current = now;
       lastSolveTextRef.current = questionText;
+
+      // Cancel the previous stream only after the duplicate guard, so a repeat trigger can't kill it
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      // Don't leave the previous answer on screen under the new question
+      useSessionStore.getState().setSolution(null);
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -196,12 +204,13 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
         setError(errMsg);
         onError?.(err);
       } finally {
+        // A superseded solve must not reset the state of the solve that replaced it
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
+          isSolvingRef.current = false;
+          setIsSolving(false);
+          setStreamingStage(null);
         }
-        isSolvingRef.current = false;
-        setIsSolving(false);
-        setStreamingStage(null);
       }
     },
     [cancelSolve, onStart, onProgress, onComplete, onError]
@@ -209,22 +218,14 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
 
   // Synchronous Panic Killswitch Watcher (< 25ms, REQ-004, AC-002)
   useEffect(() => {
-    // 1. Subscribe to appStore panic state
     const unsubscribePanicStore = useAppStore.subscribe((state) => {
       if (state.isPanicked && isSolvingRef.current) {
         cancelSolve();
       }
     });
 
-    // 2. Global window event listener
-    const handlePanicEvent = () => {
-      cancelSolve();
-    };
-    window.addEventListener("sidekick:panic", handlePanicEvent);
-
     return () => {
       unsubscribePanicStore();
-      window.removeEventListener("sidekick:panic", handlePanicEvent);
     };
   }, [cancelSolve]);
 
@@ -247,7 +248,7 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
     };
   }, [cancelSolve]);
 
-  // Listen for deep solve triggers (CustomEvent or Tauri event)
+  // Listen for deep solve triggers dispatched as window events
   useEffect(() => {
     if (!enabled) return;
 
@@ -256,25 +257,17 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
       solveQuestion(customEvent.detail);
     };
 
-    window.addEventListener("sidekick:deep_solve", handleWindowDeepSolve);
+    // Closing the answer panel cancels the stream so the answer doesn't reappear later
+    const handleWindowCancel = () => cancelSolve();
 
-    let unlistenTauri: (() => void) | undefined;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) => {
-        return listen<DetectedQuestion>("sidekick://deep_solve_triggered", (e) => {
-          solveQuestion(e.payload);
-        });
-      })
-      .then((unsub) => {
-        unlistenTauri = unsub;
-      })
-      .catch(() => {});
+    window.addEventListener("sidekick:deep_solve", handleWindowDeepSolve);
+    window.addEventListener("sidekick:cancel_solve", handleWindowCancel);
 
     return () => {
       window.removeEventListener("sidekick:deep_solve", handleWindowDeepSolve);
-      unlistenTauri?.();
+      window.removeEventListener("sidekick:cancel_solve", handleWindowCancel);
     };
-  }, [enabled, solveQuestion]);
+  }, [enabled, solveQuestion, cancelSolve]);
 
   // Cleanup on unmount
   useEffect(() => {
