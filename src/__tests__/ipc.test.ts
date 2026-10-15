@@ -51,4 +51,22 @@ describe("IPC Helper Library", () => {
     const result = await getAudioCaptureState();
     expect(result).toBeNull();
   });
+
+  it("handles setSttEngine fallback gracefully outside Tauri", async () => {
+    const { setSttEngine } = await import("../lib/ipc");
+    const result = await setSttEngine("whisper_local");
+    expect(result).toBeNull();
+  });
+
+  it("handles getSttEngine fallback gracefully outside Tauri", async () => {
+    const { getSttEngine } = await import("../lib/ipc");
+    const result = await getSttEngine();
+    expect(result).toBeNull();
+  });
+
+  it("handles listLocalSttModels fallback gracefully outside Tauri", async () => {
+    const { listLocalSttModels } = await import("../lib/ipc");
+    const result = await listLocalSttModels();
+    expect(result).toBeNull();
+  });
 });

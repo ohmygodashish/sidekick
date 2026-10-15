@@ -170,7 +170,10 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
 
-      setSttMode: (mode) => set({ sttMode: mode }),
+      setSttMode: (mode) => {
+        set({ sttMode: mode });
+        safeInvoke("set_stt_engine", { engine: mode });
+      },
 
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
 

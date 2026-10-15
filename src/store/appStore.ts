@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { safeInvoke } from "../lib/ipc";
+import { useSessionStore } from "./sessionStore";
 
 export type LayoutMode = "floating_hud" | "dynamic_notch";
 
@@ -179,6 +180,25 @@ export async function setupAppEventListeners(): Promise<() => void> {
       }
     );
     unlisteners.push(unlistenOpacity);
+
+    // 6. STT Chunk event (sidekick://stt_chunk)
+    const unlistenStt = await listen<{
+      id: string;
+      speaker: "interviewer" | "candidate";
+      text: string;
+      timestamp: number;
+      is_final: boolean;
+    }>("sidekick://stt_chunk", (e) => {
+      if (e.payload && e.payload.text) {
+        useSessionStore.getState().addTranscriptTurn({
+          id: e.payload.id,
+          speaker: e.payload.speaker,
+          text: e.payload.text,
+          timestamp: e.payload.timestamp,
+        });
+      }
+    });
+    unlisteners.push(unlistenStt);
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.warn("[Sidekick Events] Failed to bind Tauri event listeners:", err);

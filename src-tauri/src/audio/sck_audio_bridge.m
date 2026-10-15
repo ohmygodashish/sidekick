@@ -265,6 +265,14 @@ void sck_audio_stop(SCKAudioBridgeHandle *handle) {
     }
 
     handle->isRunning = NO;
+
+    // 1. Immediately nullify receiver callback and context so any in-flight frames are dropped
+    if (handle->receiver) {
+        handle->receiver.callback = NULL;
+        handle->receiver.context = NULL;
+    }
+
+    // 2. Stop capture stream with low latency (<25ms timeout for panic purge compliance)
     if (handle->stream) {
         if (handle->receiver) {
             [handle->stream removeStreamOutput:handle->receiver type:SCStreamOutputTypeAudio error:nil];
@@ -274,10 +282,16 @@ void sck_audio_stop(SCKAudioBridgeHandle *handle) {
             (void)error;
             dispatch_semaphore_signal(stopSema);
         }];
-        // Wait up to 100ms for graceful stop, but don't block panic
-        dispatch_semaphore_wait(stopSema, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
+        // Wait up to 20ms (< 25ms) for graceful stop, never blocking emergency panic purge
+        dispatch_semaphore_wait(stopSema, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC));
         handle->stream = nil;
     }
+
+    // 3. Drain and flush any pending blocks on the audio dispatch queue before releasing resources
+    if (handle->queue) {
+        dispatch_sync(handle->queue, ^{});
+    }
+
     handle->receiver = nil;
     handle->queue = nil;
 

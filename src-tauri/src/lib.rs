@@ -88,6 +88,9 @@ pub fn run() {
             start_audio_capture,
             stop_audio_capture,
             get_audio_capture_state,
+            set_stt_engine,
+            get_stt_engine,
+            list_local_stt_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

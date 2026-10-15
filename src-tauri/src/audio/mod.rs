@@ -1,15 +1,19 @@
-//! Driverless Audio Ingestion Subsystem (REQ-007, REQ-008, CON-001, SEC-003)
+//! Driverless Audio Ingestion & Offline Speech-to-Text Subsystem (REQ-007, REQ-008, REQ-009, REQ-010, AC-005, NFR-3)
 //!
-//! Dual-channel driverless audio capture and speaker diarization engine:
+//! Dual-channel driverless audio capture, diarization, and Metal-accelerated transcription:
 //! - Channel 0 (Interviewer): System and meeting audio via macOS ScreenCaptureKit.
 //! - Channel 1 (Candidate): Local voice audio via default microphone (cpal / CoreAudio).
 //! - Dual-channel mixer: 16kHz mono resampling, energy-based VAD with 1.1s turn silence detection.
 //! - Ephemeral in-memory ring buffering with zero disk persistence (SEC-003).
-//! - Sub-millisecond panic killswitch halt and buffer purge (REQ-004).
+//! - Embedded Local Whisper engine (`whisper.rs`) with Apple Metal GPU acceleration (AC-005).
+//! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local`, `groq`, or `deepgram`.
+//! - Sub-millisecond panic killswitch halt and buffer purge < 25ms (REQ-004).
 
 pub mod mic_audio;
 pub mod mixer;
 pub mod sck_audio;
+pub mod stt_dispatcher;
+pub mod whisper;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,6 +26,14 @@ pub use mixer::{
     VadConfig, DEFAULT_RMS_THRESHOLD, DEFAULT_TURN_SILENCE_SECS, TARGET_SAMPLE_RATE,
 };
 pub use sck_audio::SckAudioCapture;
+pub use stt_dispatcher::{
+    channel_to_speaker, generate_turn_id, SttChunk, SttDispatcher, SttEngineType,
+    EVENT_STT_CHUNK, EVENT_STT_ENGINE_CHANGED,
+};
+pub use whisper::{
+    get_models_dir, is_metal_supported, list_available_models, resolve_model_path,
+    LocalWhisperEngine, ModelAssetInfo, TranscriptionResult, WhisperConfig, WhisperEngine,
+};
 
 /// Tauri event names emitted to frontend
 pub const EVENT_AUDIO_TURN_COMPLETED: &str = "sidekick://audio_turn_completed";
@@ -59,6 +71,7 @@ pub struct AudioStateSnapshot {
     pub is_interviewer_capturing: bool,
     pub is_candidate_capturing: bool,
     pub is_panicked: bool,
+    pub stt_engine: String,
 }
 
 /// Core audio state managed by Tauri runtime
@@ -66,6 +79,7 @@ pub struct AudioState {
     mixer: Arc<Mutex<AudioMixer>>,
     sck_stream: Arc<Mutex<Option<SckAudioCapture>>>,
     mic_stream: Arc<Mutex<Option<MicAudioCapture>>>,
+    dispatcher: Arc<SttDispatcher>,
     is_capturing: AtomicBool,
     is_panicked: AtomicBool,
 }
@@ -76,6 +90,7 @@ impl Default for AudioState {
             mixer: Arc::new(Mutex::new(AudioMixer::default())),
             sck_stream: Arc::new(Mutex::new(None)),
             mic_stream: Arc::new(Mutex::new(None)),
+            dispatcher: Arc::new(SttDispatcher::default()),
             is_capturing: AtomicBool::new(false),
             is_panicked: AtomicBool::new(false),
         }
@@ -83,6 +98,23 @@ impl Default for AudioState {
 }
 
 impl AudioState {
+    /// Creates a state with a custom STT dispatcher (useful for tests)
+    pub fn with_dispatcher(dispatcher: Arc<SttDispatcher>) -> Self {
+        Self {
+            mixer: Arc::new(Mutex::new(AudioMixer::default())),
+            sck_stream: Arc::new(Mutex::new(None)),
+            mic_stream: Arc::new(Mutex::new(None)),
+            dispatcher,
+            is_capturing: AtomicBool::new(false),
+            is_panicked: AtomicBool::new(false),
+        }
+    }
+
+    /// Access the underlying STT dispatcher
+    pub fn dispatcher(&self) -> &Arc<SttDispatcher> {
+        &self.dispatcher
+    }
+
     /// Takes an atomic snapshot of current audio engine state
     pub fn snapshot(&self) -> AudioStateSnapshot {
         let is_interviewer = self
@@ -102,6 +134,7 @@ impl AudioState {
             is_interviewer_capturing: is_interviewer,
             is_candidate_capturing: is_candidate,
             is_panicked: self.is_panicked.load(Ordering::SeqCst),
+            stt_engine: self.dispatcher.get_engine().as_str().to_string(),
         }
     }
 
@@ -134,12 +167,19 @@ impl AudioState {
         if config.capture_interviewer {
             let mixer_clone = self.mixer.clone();
             let app_handle = app.clone();
+            let dispatcher = self.dispatcher.clone();
 
             match SckAudioCapture::start(TARGET_SAMPLE_RATE, move |samples, sample_rate, channels| {
-                if let Ok(mut mixer) = mixer_clone.lock() {
-                    if let Some(chunk) = mixer.process_samples(Channel::Interviewer, samples, sample_rate, channels) {
-                        let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    }
+                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events and running STT inference
+                let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
+                    mixer.process_samples(Channel::Interviewer, samples, sample_rate, channels)
+                } else {
+                    None
+                };
+
+                if let Some(chunk) = maybe_chunk {
+                    let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
+                    dispatcher.dispatch_chunk(&chunk, &app_handle);
                 }
             }) {
                 Ok(sck) => {
@@ -162,12 +202,19 @@ impl AudioState {
         if config.capture_candidate {
             let mixer_clone = self.mixer.clone();
             let app_handle = app.clone();
+            let dispatcher = self.dispatcher.clone();
 
             match MicAudioCapture::start(move |samples, sample_rate, channels| {
-                if let Ok(mut mixer) = mixer_clone.lock() {
-                    if let Some(chunk) = mixer.process_samples(Channel::Candidate, samples, sample_rate, channels) {
-                        let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    }
+                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events and running STT inference
+                let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
+                    mixer.process_samples(Channel::Candidate, samples, sample_rate, channels)
+                } else {
+                    None
+                };
+
+                if let Some(chunk) = maybe_chunk {
+                    let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
+                    dispatcher.dispatch_chunk(&chunk, &app_handle);
                 }
             }) {
                 Ok(mic) => {
@@ -196,6 +243,7 @@ impl AudioState {
                 "is_capturing": any_active,
                 "is_interviewer_capturing": snapshot.is_interviewer_capturing,
                 "is_candidate_capturing": snapshot.is_candidate_capturing,
+                "stt_engine": snapshot.stt_engine,
                 "warnings": errors,
             }),
         );
@@ -236,8 +284,9 @@ impl AudioState {
         Ok(())
     }
 
-    /// Synchronously halts all audio streams and purges memory buffers in < 5ms (REQ-004, SEC-003)
+    /// Synchronously halts all audio streams and purges memory buffers in < 25ms (REQ-004, SEC-003)
     pub fn purge(&self) {
+        let start = std::time::Instant::now();
         self.is_panicked.store(true, Ordering::SeqCst);
         self.is_capturing.store(false, Ordering::SeqCst);
 
@@ -256,11 +305,17 @@ impl AudioState {
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.purge();
         }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 25 {
+            eprintln!("[Sidekick Audio] Warning: AudioState::purge exceeded 25ms: {:?}", elapsed);
+        }
     }
 }
 
 pub mod commands {
     use super::*;
+    use std::str::FromStr;
     use tauri::State;
 
     /// Starts audio capture via ScreenCaptureKit (interviewer) and Microphone (candidate)
@@ -289,6 +344,38 @@ pub mod commands {
     ) -> Result<AudioStateSnapshot, String> {
         Ok(state.snapshot())
     }
+
+    /// Sets the active Speech-to-Text inference engine
+    #[tauri::command]
+    pub fn set_stt_engine(
+        app: AppHandle,
+        state: State<'_, AudioState>,
+        engine: String,
+    ) -> Result<String, String> {
+        let active = state.dispatcher.set_engine(&engine)?;
+        let _ = app.emit(
+            EVENT_STT_ENGINE_CHANGED,
+            serde_json::json!({
+                "engine": active,
+                "label": SttEngineType::from_str(&active).map(|e| e.display_label()).unwrap_or(""),
+            }),
+        );
+        Ok(active)
+    }
+
+    /// Retrieves the active Speech-to-Text inference engine identifier
+    #[tauri::command]
+    pub fn get_stt_engine(
+        state: State<'_, AudioState>,
+    ) -> Result<String, String> {
+        Ok(state.dispatcher.get_engine().as_str().to_string())
+    }
+
+    /// Lists supported and available local STT model assets
+    #[tauri::command]
+    pub fn list_local_stt_models() -> Result<Vec<ModelAssetInfo>, String> {
+        Ok(list_available_models())
+    }
 }
 
 #[cfg(test)]
@@ -312,11 +399,33 @@ mod tests {
         assert!(!snap.is_interviewer_capturing);
         assert!(!snap.is_candidate_capturing);
         assert!(!snap.is_panicked);
+        assert_eq!(snap.stt_engine, "whisper_local");
 
-        // Purge marks state panicked and clears streams
+        // Measure purge duration (<25ms requirement per Task 9 review feedback)
+        let purge_start = std::time::Instant::now();
         state.purge();
+        let purge_duration = purge_start.elapsed();
+
+        assert!(
+            purge_duration.as_millis() < 25,
+            "Purge took {:?}, must complete in < 25ms",
+            purge_duration
+        );
+
         let snap2 = state.snapshot();
         assert!(snap2.is_panicked);
         assert!(!snap2.is_capturing);
+    }
+
+    #[test]
+    fn test_audio_state_dispatcher_engine_change() {
+        let state = AudioState::default();
+        assert_eq!(state.snapshot().stt_engine, "whisper_local");
+
+        state.dispatcher.set_engine("groq").unwrap();
+        assert_eq!(state.snapshot().stt_engine, "groq");
+
+        state.dispatcher.set_engine("deepgram").unwrap();
+        assert_eq!(state.snapshot().stt_engine, "deepgram");
     }
 }

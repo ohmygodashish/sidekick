@@ -119,3 +119,47 @@ export async function getAudioCaptureState(): Promise<AudioStateSnapshot | null>
   return await safeInvoke<AudioStateSnapshot>("get_audio_capture_state");
 }
 
+/**
+ * Standardized Speech-to-Text transcript chunk delivered via sidekick://stt_chunk (REQ-009, REQ-010).
+ */
+export interface SttChunk {
+  id: string;
+  speaker: Channel;
+  text: string;
+  timestamp: number;
+  is_final: boolean;
+}
+
+/**
+ * Local Whisper model asset metadata.
+ */
+export interface ModelAssetInfo {
+  name: string;
+  filename: string;
+  path?: string | null;
+  size_bytes: number;
+  is_available: boolean;
+  download_url: string;
+}
+
+/**
+ * Configures the active Speech-to-Text inference engine in the native backend.
+ */
+export async function setSttEngine(engine: string): Promise<string | null> {
+  return await safeInvoke<string>("set_stt_engine", { engine });
+}
+
+/**
+ * Retrieves the currently active Speech-to-Text engine identifier.
+ */
+export async function getSttEngine(): Promise<string | null> {
+  return await safeInvoke<string>("get_stt_engine");
+}
+
+/**
+ * Lists available local STT model assets and their download/disk status.
+ */
+export async function listLocalSttModels(): Promise<ModelAssetInfo[] | null> {
+  return await safeInvoke<ModelAssetInfo[]>("list_local_stt_models");
+}
+
