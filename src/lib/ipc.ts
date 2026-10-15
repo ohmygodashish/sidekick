@@ -58,3 +58,64 @@ export async function captureActiveWindow(): Promise<WindowCaptureResponse | nul
   return await safeInvoke<WindowCaptureResponse>("capture_active_window");
 }
 
+/**
+ * Speaker diarization channel identifiers (REQ-008).
+ */
+export type Channel = "interviewer" | "candidate";
+
+/**
+ * Speech turn audio chunk contract emitted by mixer.
+ */
+export interface AudioChunk {
+  channel: Channel;
+  samples: number[];
+  sample_rate: number;
+  timestamp_ms: number;
+  duration_secs: number;
+  rms_energy: number;
+  is_speech: boolean;
+}
+
+/**
+ * Configuration options for starting dual-channel audio capture (REQ-007, REQ-008).
+ */
+export interface AudioCaptureConfig {
+  capture_interviewer: boolean;
+  capture_candidate: boolean;
+  vad_silence_secs?: number;
+  vad_threshold?: number;
+}
+
+/**
+ * State snapshot of the native audio capture pipeline.
+ */
+export interface AudioStateSnapshot {
+  is_capturing: boolean;
+  is_interviewer_capturing: boolean;
+  is_candidate_capturing: boolean;
+  is_panicked: boolean;
+}
+
+/**
+ * Starts audio capture on ScreenCaptureKit system sound and/or microphone.
+ */
+export async function startAudioCapture(config?: AudioCaptureConfig): Promise<boolean> {
+  const result = await safeInvoke<boolean | null>("start_audio_capture", { config });
+  return result !== null;
+}
+
+/**
+ * Halts active audio capture streams.
+ */
+export async function stopAudioCapture(): Promise<boolean> {
+  const result = await safeInvoke<boolean | null>("stop_audio_capture");
+  return result !== null;
+}
+
+/**
+ * Retrieves the current atomic snapshot of the audio capture pipeline.
+ */
+export async function getAudioCaptureState(): Promise<AudioStateSnapshot | null> {
+  return await safeInvoke<AudioStateSnapshot>("get_audio_capture_state");
+}
+

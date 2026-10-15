@@ -30,4 +30,25 @@ describe("IPC Helper Library", () => {
     const result = await burnSession();
     expect(result).toBe(false);
   });
+
+  it("handles startAudioCapture fallback gracefully outside Tauri", async () => {
+    const { startAudioCapture } = await import("../lib/ipc");
+    const result = await startAudioCapture({
+      capture_interviewer: true,
+      capture_candidate: true,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("handles stopAudioCapture fallback gracefully outside Tauri", async () => {
+    const { stopAudioCapture } = await import("../lib/ipc");
+    const result = await stopAudioCapture();
+    expect(result).toBe(false);
+  });
+
+  it("handles getAudioCaptureState fallback gracefully outside Tauri", async () => {
+    const { getAudioCaptureState } = await import("../lib/ipc");
+    const result = await getAudioCaptureState();
+    expect(result).toBeNull();
+  });
 });

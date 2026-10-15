@@ -213,6 +213,11 @@ pub fn trigger_panic<R: Runtime>(
     // 2. Mark state as panicked
     state.is_panicked.store(true, Ordering::SeqCst);
 
+    // 3. Halt all audio capture pipelines and purge ephemeral buffers immediately (< 5ms, REQ-004)
+    if let Some(audio_state) = app.try_state::<crate::audio::AudioState>() {
+        audio_state.purge();
+    }
+
     // 3. Emit panic event to frontend to abort streaming requests and flush buffers
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

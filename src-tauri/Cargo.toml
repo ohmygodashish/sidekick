@@ -11,6 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1.0"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
@@ -24,6 +25,7 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 core-graphics = "0.24"
 foreign-types = "0.5"
+cpal = "0.15"
 
 [profile.release]
 codegen-units = 1

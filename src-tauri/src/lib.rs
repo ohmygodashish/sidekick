@@ -1,6 +1,7 @@
 //! Sidekick Core Library
 
 pub mod appkit;
+pub mod audio;
 pub mod capture;
 pub mod hotkeys;
 
@@ -25,11 +26,15 @@ fn retrieve_api_key(_provider: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn burn_session() -> Result<(), String> {
-    // Session context and buffer eradication placeholder
+fn burn_session(app: tauri::AppHandle) -> Result<(), String> {
+    // Instantly purge all active audio ring buffers and halt streams (SEC-003, REQ-004)
+    if let Some(audio_state) = app.try_state::<audio::AudioState>() {
+        audio_state.purge();
+    }
     Ok(())
 }
 
+use audio::commands::*;
 use capture::capture_active_window;
 use hotkeys::commands::*;
 
@@ -53,6 +58,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(hotkeys::HotkeyState::default())
+        .manage(audio::AudioState::default())
         .plugin(hotkey_plugin)
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -79,6 +85,9 @@ pub fn run() {
             retrieve_api_key,
             burn_session,
             capture_active_window,
+            start_audio_capture,
+            stop_audio_capture,
+            get_audio_capture_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
