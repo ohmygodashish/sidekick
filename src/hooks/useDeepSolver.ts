@@ -32,6 +32,8 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isSolvingRef = useRef(false);
+  const lastSolveTimeRef = useRef<number>(0);
+  const lastSolveTextRef = useRef<string>("");
 
   /**
    * Synchronously cancels in-flight fetch streams (< 25ms, REQ-004 / AC-002).
@@ -95,6 +97,17 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
       }
 
       if (!questionText) return;
+ 
+      // 500ms duplicate solve guard
+      const now = Date.now();
+      if (
+        questionText === lastSolveTextRef.current &&
+        now - lastSolveTimeRef.current < 500
+      ) {
+        return;
+      }
+      lastSolveTimeRef.current = now;
+      lastSolveTextRef.current = questionText;
 
       const controller = new AbortController();
       abortControllerRef.current = controller;

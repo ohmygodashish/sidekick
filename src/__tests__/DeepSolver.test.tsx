@@ -510,6 +510,32 @@ Space Complexity: O(C) capacity
       expect(solution.stage1Intuition).not.toBeNull();
       expect(solution.stage2Code).not.toBeNull();
     });
+
+    it("routes groq provider requests to Groq completions endpoint", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(
+          'data: {"choices":[{"delta":{"content":"<stage_1_intuition><verbal_summary>Groq fast inference</verbal_summary></stage_1_intuition>"}}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        )
+      );
+
+      const solution = await dispatchDeepSolve({
+        provider: "groq",
+        apiKey: "gsk_test123",
+        prompt: "Explain event loops",
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.groq.com/openai/v1/chat/completions",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer gsk_test123",
+          }),
+        })
+      );
+      expect(solution.stage1Intuition?.verbalSummary).toContain("Groq fast inference");
+    });
   });
 
   describe("6. React Hook useDeepSolver & Panic Killswitch (Constraint 4, REQ-004, AC-002)", () => {
@@ -631,6 +657,19 @@ Space Complexity: O(C) capacity
       });
 
       expect(screen.getByTestId("is-solving").textContent).toBe("false");
+    });
+
+    it("deduplicates rapid solve requests for same question within 500ms window", async () => {
+      const onStart = vi.fn();
+      render(<TestDeepSolverComponent onStart={onStart} />);
+
+      await act(async () => {
+        screen.getByTestId("solve-btn").click();
+        screen.getByTestId("solve-btn").click();
+        screen.getByTestId("solve-btn").click();
+      });
+
+      expect(onStart).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -28,6 +28,9 @@ foreign-types = "0.5"
 cpal = "0.15"
 whisper-rs = { version = "0.14", features = ["metal"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
+security-framework = "2.11"
+security-framework-sys = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 codegen-units = 1

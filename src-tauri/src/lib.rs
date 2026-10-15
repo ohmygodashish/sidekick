@@ -4,8 +4,9 @@ pub mod appkit;
 pub mod audio;
 pub mod capture;
 pub mod hotkeys;
+pub mod storage;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -14,23 +15,25 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn store_api_key(_provider: String, _key: String) -> Result<(), String> {
-    // In-memory / keychain placeholder until Task 13 native Keychain integration
-    Ok(())
+fn store_api_key(provider: String, key: String) -> Result<(), String> {
+    storage::keychain::store_credential(&provider, &key)
 }
 
 #[tauri::command]
-fn retrieve_api_key(_provider: String) -> Result<Option<String>, String> {
-    // In-memory / keychain placeholder until Task 13 native Keychain integration
-    Ok(None)
+fn retrieve_api_key(provider: String) -> Result<String, String> {
+    storage::keychain::retrieve_credential(&provider)
 }
 
 #[tauri::command]
 fn burn_session(app: tauri::AppHandle) -> Result<(), String> {
-    // Instantly purge all active audio ring buffers and halt streams (SEC-003, REQ-004)
+    // 1. Instantly purge all active audio ring buffers and halt streams (SEC-003, REQ-004)
     if let Some(audio_state) = app.try_state::<audio::AudioState>() {
         audio_state.purge();
     }
+    // 2. Eradicate SQLite session DB records & files (SEC-003, REQ-017)
+    storage::db::burn_session()?;
+    // 3. Emit session burned event to frontend
+    let _ = app.emit("sidekick://session_burned", ());
     Ok(())
 }
 
@@ -104,5 +107,25 @@ mod tests {
     #[test]
     fn test_greet() {
         assert_eq!(greet("World"), "Hello, World! You've been greeted from Rust!");
+    }
+
+    #[test]
+    fn test_store_and_retrieve_api_key_commands() {
+        storage::keychain::set_mock_mode(true);
+        storage::keychain::clear_fallback();
+
+        assert_eq!(retrieve_api_key("openrouter".into()).unwrap(), "");
+
+        store_api_key("openrouter".into(), "sk-or-v1-my-secret-key".into()).unwrap();
+        assert_eq!(
+            retrieve_api_key("openrouter".into()).unwrap(),
+            "sk-or-v1-my-secret-key"
+        );
+
+        // Clear key
+        store_api_key("openrouter".into(), "".into()).unwrap();
+        assert_eq!(retrieve_api_key("openrouter".into()).unwrap(), "");
+
+        storage::keychain::set_mock_mode(false);
     }
 }

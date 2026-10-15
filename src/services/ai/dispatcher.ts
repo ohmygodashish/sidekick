@@ -394,6 +394,12 @@ export async function dispatchDeepSolve(
       case "gemini":
         await streamGemini(req);
         break;
+      case "groq":
+        await streamOpenAI({
+          ...req,
+          endpoint: "https://api.groq.com/openai/v1/chat/completions",
+        });
+        break;
       default:
         await streamOpenRouter(req);
         break;
