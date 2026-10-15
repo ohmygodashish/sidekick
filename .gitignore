@@ -27,3 +27,7 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# Agents
+.agents
+.claude
