@@ -16,13 +16,16 @@ import { useSettingsStore } from "../store/settingsStore";
 function TestQuestionDetectorComponent({
   onQuestionDetected,
   onDeepSolve,
+  allowCandidate,
 }: {
   onQuestionDetected?: () => void;
   onDeepSolve?: () => void;
+  allowCandidate?: boolean;
 }) {
   const { isEvaluating, activeQuestion, triggerDeepSolve } = useQuestionDetector({
     onQuestionDetected,
     onDeepSolve,
+    allowCandidate,
   });
 
   return (
@@ -382,9 +385,29 @@ describe("Task 11: Real-Time Question Extractor & Quick Pointers Engine", () => 
         });
       });
 
-      // Channel 1 turns MUST NOT trigger question detection
+      // Channel 1 turns MUST NOT trigger question detection when candidate detection is off
       expect(useSessionStore.getState().activeQuestion).toBeNull();
       expect(onDetected).not.toHaveBeenCalled();
+    });
+
+    it("evaluates candidate turns when allowCandidate is true (pill mode / copilot testing)", async () => {
+      const onDetected = vi.fn();
+      render(<TestQuestionDetectorComponent onQuestionDetected={onDetected} allowCandidate={true} />);
+
+      await act(async () => {
+        useSessionStore.getState().addTranscriptTurn({
+          speaker: "candidate",
+          text: "How would you design a distributed cache to handle hot keys?",
+          timestamp: Date.now(),
+        });
+      });
+
+      // Channel 1 turns DO trigger question detection when allowCandidate is true
+      expect(useSessionStore.getState().activeQuestion).not.toBeNull();
+      expect(
+        useSessionStore.getState().activeQuestion?.extractedQuestion
+      ).toBe("How would you design a distributed cache to handle hot keys?");
+      expect(onDetected).toHaveBeenCalledTimes(1);
     });
 
     it("triggers Deep Solve when pressing Enter hotkey while question is active", () => {

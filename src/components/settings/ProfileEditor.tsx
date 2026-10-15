@@ -151,7 +151,7 @@ export const ProfileEditor: React.FC = () => {
               value={profile.targetCompany}
               onChange={(e) => setProfile({ targetCompany: e.target.value })}
               placeholder="e.g. Stripe, Google, Datadog, Snowflake..."
-              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
 
@@ -167,7 +167,7 @@ export const ProfileEditor: React.FC = () => {
               value={profile.jobDescription}
               onChange={(e) => setProfile({ jobDescription: e.target.value })}
               placeholder="Paste job posting requirements, key systems, tech stack, and evaluation rubric..."
-              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 resize-none font-mono"
+              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 resize-none font-mono leading-relaxed"
             />
           </div>
         </div>
@@ -236,7 +236,7 @@ export const ProfileEditor: React.FC = () => {
           value={profile.resumeText}
           onChange={(e) => setProfile({ resumeText: e.target.value })}
           placeholder="Or paste your resume text, key career highlights, and domain expertise here..."
-          className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-2.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 resize-none font-mono"
+          className="w-full rounded-lg bg-zinc-900 border border-zinc-800 p-3 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 resize-none font-mono leading-relaxed"
         />
       </section>
 
@@ -323,7 +323,7 @@ export const ProfileEditor: React.FC = () => {
       </section>
 
       {/* Save Button */}
-      <div className="pt-2 flex items-center justify-between border-t border-zinc-800/80">
+      <div className="pt-3 flex items-center justify-between border-t border-zinc-800/80">
         <span className="text-[11px] text-zinc-400">
           Profile is persisted locally and applied to candidate prompts.
         </span>

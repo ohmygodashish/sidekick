@@ -158,7 +158,7 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
           </div>
         </div>
 
-        {/* Center: Extracted Question Headline or Idle Eye Contact Indicator */}
+        {/* Center: Extracted Question Headline or Live Transcript Snippet or Idle Indicator */}
         <div className="flex-1 px-2 text-center min-w-0 pointer-events-none">
           {activeQuestion ? (
             <p
@@ -166,6 +166,14 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
               className="text-[11px] font-medium text-emerald-300 truncate tracking-tight"
             >
               {activeQuestion.extractedQuestion}
+            </p>
+          ) : lastTurn?.text ? (
+            <p
+              data-testid="notch-latest-turn"
+              className="text-[10px] font-normal text-zinc-300 truncate tracking-tight"
+            >
+              <span className="text-zinc-500 font-mono text-[9px] mr-1">{speakerLabel}:</span>
+              {lastTurn.text}
             </p>
           ) : (
             <div className="flex items-center justify-center gap-1 text-[10px] text-zinc-400">

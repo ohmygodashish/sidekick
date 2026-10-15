@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { safeInvoke } from "../lib/ipc";
+import { safeInvoke, startAudioCapture } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
 
 export type LayoutMode = "floating_hud" | "dynamic_notch";
@@ -74,6 +74,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   resetPanic: () => {
     set({ isPanicked: false });
+    startAudioCapture().catch(() => {});
   },
 
   syncFromBackend: async () => {
@@ -125,6 +126,9 @@ export async function setupAppEventListeners(): Promise<() => void> {
         isVisible: payload.visible,
         ...(payload.visible ? { isPanicked: false } : {}),
       });
+      if (payload.visible) {
+        startAudioCapture().catch(() => {});
+      }
     };
 
     const unlistenVis1 = await listen<{ visible: boolean }>(

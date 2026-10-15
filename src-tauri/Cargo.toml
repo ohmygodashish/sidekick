@@ -28,7 +28,7 @@ core-graphics = "0.24"
 foreign-types = "0.5"
 cpal = "0.15"
 whisper-rs = { version = "0.14", features = ["metal"] }
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart"] }
 security-framework = "2.11"
 security-framework-sys = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }

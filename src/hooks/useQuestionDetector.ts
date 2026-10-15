@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSessionStore, DetectedQuestion } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
+import { useAppStore } from "../store/appStore";
 import {
   detectQuestion,
   QuestionDetectionPayload,
@@ -12,12 +13,14 @@ export interface UseQuestionDetectorOptions {
   onQuestionDetected?: (payload: QuestionDetectionPayload) => void;
   onDeepSolve?: (question: DetectedQuestion) => void;
   enabled?: boolean;
+  allowCandidate?: boolean;
 }
 
 export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
-  const { onQuestionDetected, onDeepSolve, enabled = true } = options || {};
+  const { onQuestionDetected, onDeepSolve, enabled = true, allowCandidate } = options || {};
   const [isEvaluating, setIsEvaluating] = useState(false);
   const activeQuestion = useSessionStore((s) => s.activeQuestion);
+  const layoutMode = useAppStore((s) => s.layoutMode);
 
   const lastEvaluatedTurnIdRef = useRef<string | null>(null);
 
@@ -78,7 +81,7 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
     [onQuestionDetected]
   );
 
-  // Subscribe to STT turns from Channel 0 (Interviewer)
+  // Subscribe to STT turns from Interviewer (Channel 0) and Candidate (Channel 1 in pill mode / copilot)
   useEffect(() => {
     if (!enabled) return;
 
@@ -87,8 +90,9 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
       if (transcript.length === 0) return;
 
       const latestTurn = transcript[transcript.length - 1];
-      // Channel 0 is Interviewer (REQ-008, REQ-011)
-      if (latestTurn.speaker !== "interviewer") return;
+      // Evaluate interviewer speech, or candidate speech if allowed / in dynamic notch pill mode
+      const isCandidateAllowed = allowCandidate ?? (layoutMode === "dynamic_notch");
+      if (latestTurn.speaker === "candidate" && !isCandidateAllowed) return;
       if (latestTurn.id === lastEvaluatedTurnIdRef.current) return;
 
       lastEvaluatedTurnIdRef.current = latestTurn.id;
@@ -98,7 +102,7 @@ export function useQuestionDetector(options?: UseQuestionDetectorOptions) {
     return () => {
       unsubscribe();
     };
-  }, [enabled, evaluateTurn]);
+  }, [enabled, evaluateTurn, allowCandidate, layoutMode]);
 
   // Global hotkeys: Enter or Cmd+Enter to trigger Deep Solve when activeQuestion is set (REQ-012)
   useEffect(() => {

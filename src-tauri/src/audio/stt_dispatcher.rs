@@ -282,6 +282,19 @@ impl SttDispatcher {
 
     /// Groq Whisper cloud transcription dispatcher with offline fallback
     fn transcribe_groq_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
+        // Attempt Groq API if key is present in Keychain
+        if let Ok(key) = crate::storage::keychain::retrieve_credential("groq") {
+            let key = key.trim();
+            if !key.is_empty() {
+                match call_groq_whisper_api(key, &chunk.samples, chunk.sample_rate) {
+                    Ok(text) => return Ok(text),
+                    Err(e) => {
+                        eprintln!("[Sidekick STT] Groq cloud transcription warning: {e}. Falling back to local Whisper.");
+                    }
+                }
+            }
+        }
+
         // Fallback for offline or test environments
         self.local_whisper
             .transcribe(&chunk.samples, chunk.sample_rate)
@@ -290,11 +303,127 @@ impl SttDispatcher {
 
     /// Deepgram Nova-2 cloud transcription dispatcher with offline fallback
     fn transcribe_deepgram_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
+        // Attempt Deepgram API if token is present in Keychain
+        if let Ok(key) = crate::storage::keychain::retrieve_credential("deepgram") {
+            let key = key.trim();
+            if !key.is_empty() {
+                match call_deepgram_api(key, &chunk.samples, chunk.sample_rate) {
+                    Ok(text) => return Ok(text),
+                    Err(e) => {
+                        eprintln!("[Sidekick STT] Deepgram cloud transcription warning: {e}. Falling back to local Whisper.");
+                    }
+                }
+            }
+        }
+
         // Fallback for offline or test environments
         self.local_whisper
             .transcribe(&chunk.samples, chunk.sample_rate)
             .map(|r| r.text)
     }
+}
+
+/// Helper to call Groq Whisper API for low-latency cloud transcription
+fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    let wav_bytes = encode_wav_pcm16(samples, sample_rate);
+    let part = reqwest::multipart::Part::bytes(wav_bytes)
+        .file_name("speech.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("Failed to create multipart audio part: {e}"))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", "whisper-large-v3-turbo")
+        .text("response_format", "json");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create reqwest client: {e}"))?;
+
+    let response = tauri::async_runtime::block_on(async {
+        client
+            .post("https://api.groq.com/openai/v1/audio/transcriptions")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .multipart(form)
+            .send()
+            .await
+    }).map_err(|e| format!("Groq HTTP error: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = tauri::async_runtime::block_on(async { response.text().await })
+            .unwrap_or_default();
+        return Err(format!("Groq API error ({status}): {body}"));
+    }
+
+    #[derive(Deserialize)]
+    struct GroqResponse {
+        text: String,
+    }
+
+    let parsed: GroqResponse = tauri::async_runtime::block_on(async {
+        response.json().await
+    }).map_err(|e| format!("Failed to parse Groq response JSON: {e}"))?;
+
+    Ok(parsed.text.trim().to_string())
+}
+
+/// Helper to call Deepgram Nova-2 API for cloud speech transcription
+fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    let wav_bytes = encode_wav_pcm16(samples, sample_rate);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create reqwest client: {e}"))?;
+
+    let response = tauri::async_runtime::block_on(async {
+        client
+            .post("https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")
+            .header("Authorization", format!("Token {api_key}"))
+            .header("Content-Type", "audio/wav")
+            .body(wav_bytes)
+            .send()
+            .await
+    }).map_err(|e| format!("Deepgram HTTP error: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = tauri::async_runtime::block_on(async { response.text().await })
+            .unwrap_or_default();
+        return Err(format!("Deepgram API error ({status}): {body}"));
+    }
+
+    #[derive(Deserialize)]
+    struct DeepgramAlternative {
+        transcript: String,
+    }
+    #[derive(Deserialize)]
+    struct DeepgramChannel {
+        alternatives: Vec<DeepgramAlternative>,
+    }
+    #[derive(Deserialize)]
+    struct DeepgramResults {
+        channels: Vec<DeepgramChannel>,
+    }
+    #[derive(Deserialize)]
+    struct DeepgramResponse {
+        results: DeepgramResults,
+    }
+
+    let parsed: DeepgramResponse = tauri::async_runtime::block_on(async {
+        response.json().await
+    }).map_err(|e| format!("Failed to parse Deepgram response: {e}"))?;
+
+    let transcript = parsed
+        .results
+        .channels
+        .first()
+        .and_then(|ch| ch.alternatives.first())
+        .map(|alt| alt.transcript.trim().to_string())
+        .unwrap_or_default();
+
+    Ok(transcript)
 }
 
 /// Item passed through the asynchronous STT worker queue

@@ -7,7 +7,7 @@ import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useQuestionDetector } from "./hooks/useQuestionDetector";
 import { useDeepSolver } from "./hooks/useDeepSolver";
-import { setSttEngine } from "./lib/ipc";
+import { setSttEngine, startAudioCapture } from "./lib/ipc";
 import { cn } from "./lib/utils";
 
 export default function App() {
@@ -16,7 +16,7 @@ export default function App() {
   const layoutMode = useAppStore((state) => state.layoutMode);
 
   // Initialize live question detection and Enter / Cmd+Enter hotkeys (REQ-011, REQ-012)
-  useQuestionDetector();
+  useQuestionDetector({ allowCandidate: true });
 
   // Initialize deep solver gateway with progressive streaming (REQ-014, REQ-015)
   useDeepSolver();
@@ -29,6 +29,11 @@ export default function App() {
     // Synchronize persisted STT mode to native backend (Task 10 review fix)
     const sttMode = useSettingsStore.getState().sttMode;
     setSttEngine(sttMode);
+
+    // Auto-start driverless audio ingestion pipeline (REQ-007, REQ-008)
+    startAudioCapture().catch((err) => {
+      console.warn("[App] Could not initialize audio capture on mount:", err);
+    });
 
     // 2. Setup hotkey and window event listeners
     let cleanupFn: (() => void) | undefined;
@@ -64,7 +69,7 @@ export default function App() {
     <div
       data-testid="app-root"
       className={cn(
-        "min-h-screen w-screen flex bg-transparent transition-all duration-300 ease-out select-none",
+        "h-screen w-screen flex bg-transparent transition-all duration-300 ease-out select-none overflow-hidden",
         isNotch
           ? "items-start justify-center pt-0 sm:pt-1 px-2"
           : "items-center justify-center p-4"

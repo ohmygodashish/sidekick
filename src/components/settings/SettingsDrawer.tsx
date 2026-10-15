@@ -11,10 +11,17 @@ import {
   Shield,
   Radio,
   Cpu,
+  Download,
+  Loader2,
 } from "lucide-react";
 import { useSettingsStore } from "../../store/settingsStore";
 import { useSessionStore } from "../../store/sessionStore";
-import { safeInvoke } from "../../lib/ipc";
+import {
+  safeInvoke,
+  listLocalSttModels,
+  downloadSttModel,
+  type ModelAssetInfo,
+} from "../../lib/ipc";
 import { ApiKeyInputs } from "./ApiKeyInputs";
 import { ProfileEditor } from "./ProfileEditor";
 import { cn } from "../../lib/utils";
@@ -46,6 +53,34 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab);
   const [burnFeedback, setBurnFeedback] = useState<string | null>(null);
   const [resetFeedback, setResetFeedback] = useState<string | null>(null);
+  const [localModels, setLocalModels] = useState<ModelAssetInfo[]>([]);
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
+
+  // Fetch local models status when drawer is opened or activeTab is audio
+  useEffect(() => {
+    if (!isOpen) return;
+    listLocalSttModels().then((models) => {
+      if (models) setLocalModels(models);
+    });
+  }, [isOpen, activeTab]);
+
+  const handleDownloadTiny = async () => {
+    setDownloadingModel("tiny");
+    setDownloadProgress("Downloading ggml-tiny.en.bin (~75 MB)...");
+    try {
+      await downloadSttModel("tiny");
+      setDownloadProgress("Model downloaded & loaded with Apple Metal GPU!");
+      const updated = await listLocalSttModels();
+      if (updated) setLocalModels(updated);
+      setTimeout(() => setDownloadProgress(null), 3500);
+    } catch (err) {
+      setDownloadProgress("Failed to download model. Check internet connection.");
+      setTimeout(() => setDownloadProgress(null), 4000);
+    } finally {
+      setDownloadingModel(null);
+    }
+  };
 
   // Escape key to dismiss settings when open (ignoring Cmd/Ctrl to not interfere with Panic killswitch)
   useEffect(() => {
@@ -318,6 +353,106 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     </p>
                   </button>
                 </div>
+
+                {/* Local Whisper Model Management */}
+                {sttMode === "whisper_local" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-zinc-200">
+                        Local Model: ggml-tiny.en.bin
+                      </span>
+                      <span
+                        className={cn(
+                          "text-[10px] px-2 py-0.5 rounded-full font-medium border",
+                          Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
+                            ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                            : "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                        )}
+                      >
+                        {Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
+                          ? "Installed & Ready"
+                          : "Not Downloaded"}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      {Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available)
+                        ? "Model weights are loaded with Apple Metal GPU acceleration. 100% offline speech-to-text is ready."
+                        : "Local weights (~75 MB) are required for offline transcription. Once downloaded, Sidekick transcribes with zero cloud dependencies."}
+                    </p>
+
+                    {downloadProgress && (
+                      <p className="text-[11px] text-sky-400 flex items-center gap-1.5">
+                        {downloadingModel && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+                        <span>{downloadProgress}</span>
+                      </p>
+                    )}
+
+                    {!Boolean(localModels.find((m) => m.filename.includes("tiny"))?.is_available) && (
+                      <button
+                        type="button"
+                        data-testid="download-tiny-model-btn"
+                        onClick={handleDownloadTiny}
+                        disabled={Boolean(downloadingModel)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white transition-colors"
+                      >
+                        {downloadingModel ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <span>Downloading (~75 MB)...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-3.5 w-3.5" />
+                            <span>Download Tiny Model (75 MB)</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Groq Key Alert */}
+                {sttMode === "groq" && !useSettingsStore.getState().apiKeys.groq && (
+                  <div className="rounded-xl border border-sky-500/30 bg-sky-950/20 p-3 text-xs text-sky-200 flex items-start gap-2">
+                    <Radio className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <span className="font-semibold text-sky-200">Groq API Key Required</span>
+                      <p className="text-[11px] text-sky-300/80 leading-relaxed">
+                        To use Groq Whisper Cloud with ultra-fast latency, enter your Groq API key in the{" "}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("keys")}
+                          className="underline text-sky-400 font-medium"
+                        >
+                          API Keys & Models
+                        </button>{" "}
+                        tab.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Deepgram Key Alert */}
+                {sttMode === "deepgram" && !useSettingsStore.getState().apiKeys.deepgram && (
+                  <div className="rounded-xl border border-purple-500/30 bg-purple-950/20 p-3 text-xs text-purple-200 flex items-start gap-2">
+                    <Mic className="h-4 w-4 text-purple-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <span className="font-semibold text-purple-200">Deepgram Token Required</span>
+                      <p className="text-[11px] text-purple-300/80 leading-relaxed">
+                        To use Deepgram streaming transcription, enter your Deepgram token in the{" "}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("keys")}
+                          className="underline text-purple-400 font-medium"
+                        >
+                          API Keys & Models
+                        </button>{" "}
+                        tab.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Driverless Audio Architecture Note */}

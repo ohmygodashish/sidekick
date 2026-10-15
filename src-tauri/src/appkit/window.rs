@@ -72,10 +72,11 @@ pub fn configure_stealth_window(ns_window: id) {
                 | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
         );
 
-        // Configure transparent background
+        // Configure transparent background and disable window-level drop shadow
         ns_window.setOpaque_(NO);
         let clear_color = NSColor::clearColor(nil);
         ns_window.setBackgroundColor_(clear_color);
+        let _: () = msg_send![ns_window, setHasShadow: NO];
     }
 }
 

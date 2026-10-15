@@ -177,13 +177,13 @@ export const ApiKeyInputs: React.FC = () => {
       </div>
 
       {/* Model & Provider Strategy */}
-      <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 space-y-4">
+      <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 space-y-3.5">
         <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
           <Key className="h-3.5 w-3.5 text-amber-400" />
           <span>Active Inference Routing</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+        <div className="flex flex-col gap-3 text-xs">
           {/* Primary Provider */}
           <div className="space-y-1.5">
             <label className="text-zinc-400 text-[11px] font-medium">
@@ -193,7 +193,7 @@ export const ApiKeyInputs: React.FC = () => {
               data-testid="selected-provider-select"
               value={selectedProvider}
               onChange={(e) => setSelectedProvider(e.target.value as ApiProvider)}
-              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 text-zinc-100 text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-100 text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
             >
               <option value="openrouter">OpenRouter (Unified)</option>
               <option value="anthropic">Anthropic (Direct)</option>
@@ -214,12 +214,12 @@ export const ApiKeyInputs: React.FC = () => {
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               placeholder="e.g. anthropic/claude-3.5-sonnet"
-              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 text-zinc-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
 
           {/* Fast Evaluator Model */}
-          <div className="space-y-1.5 sm:col-span-2">
+          <div className="space-y-1.5">
             <label className="text-zinc-400 text-[11px] font-medium">
               Stage 1 Evaluator / Intent Classifier Model (Fast)
             </label>
@@ -229,7 +229,7 @@ export const ApiKeyInputs: React.FC = () => {
               value={evaluatorModel}
               onChange={(e) => setEvaluatorModel(e.target.value)}
               placeholder="e.g. groq/llama-3.3-70b-versatile"
-              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 text-zinc-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
         </div>
@@ -256,14 +256,14 @@ export const ApiKeyInputs: React.FC = () => {
               <div
                 key={provider.id}
                 data-testid={`provider-card-${provider.id}`}
-                className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 space-y-2 transition-colors hover:border-zinc-700/80"
+                className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3.5 space-y-2.5 transition-colors hover:border-zinc-700/80"
               >
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
                     <h4 className="text-xs font-semibold text-zinc-200">
                       {provider.name}
                     </h4>
-                    <p className="text-[10px] text-zinc-400">
+                    <p className="text-[10px] text-zinc-400 truncate">
                       {provider.subtitle}
                     </p>
                   </div>
@@ -275,7 +275,7 @@ export const ApiKeyInputs: React.FC = () => {
                     onClick={() => handleTestConnection(provider)}
                     disabled={status.state === "testing"}
                     className={cn(
-                      "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors",
+                      "flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium border shrink-0 transition-colors",
                       status.state === "success"
                         ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
                         : status.state === "error"
@@ -312,7 +312,7 @@ export const ApiKeyInputs: React.FC = () => {
                     value={currentValue}
                     onChange={(e) => setApiKey(provider.id, e.target.value)}
                     placeholder={provider.placeholder}
-                    className="w-full rounded-lg bg-zinc-950 border border-zinc-800/90 pl-3 pr-10 py-1.5 text-xs text-zinc-100 font-mono placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 transition-colors"
+                    className="w-full rounded-lg bg-zinc-950 border border-zinc-800/90 pl-3 pr-10 py-2 text-xs text-zinc-100 font-mono placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-sky-500 focus:border-sky-500 transition-colors"
                   />
                   <button
                     type="button"
