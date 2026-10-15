@@ -6,6 +6,7 @@ import { SettingsDrawer } from "./components/settings/SettingsDrawer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useQuestionDetector } from "./hooks/useQuestionDetector";
+import { useDeepSolver } from "./hooks/useDeepSolver";
 import { setSttEngine } from "./lib/ipc";
 import { cn } from "./lib/utils";
 
@@ -16,6 +17,9 @@ export default function App() {
 
   // Initialize live question detection and Enter / Cmd+Enter hotkeys (REQ-011, REQ-012)
   useQuestionDetector();
+
+  // Initialize deep solver gateway with progressive streaming (REQ-014, REQ-015)
+  useDeepSolver();
 
   useEffect(() => {
     // 1. Initial state synchronization with Tauri backend
