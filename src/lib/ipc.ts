@@ -18,6 +18,23 @@ export async function safeInvoke<T>(
 }
 
 /**
+ * Safely emits a Tauri event.
+ * Gracefully falls back if running in browser/test environment.
+ */
+export async function safeEmit<T>(event: string, payload?: T): Promise<boolean> {
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(event, payload);
+    return true;
+  } catch (err) {
+    if (process.env.NODE_ENV !== "test") {
+      console.warn(`[Sidekick IPC] '${event}' emit failed or running outside Tauri context:`, err);
+    }
+    return false;
+  }
+}
+
+/**
  * Stores an API key into secure Keychain storage via Tauri backend.
  */
 export async function storeApiKey(provider: string, key: string): Promise<boolean> {

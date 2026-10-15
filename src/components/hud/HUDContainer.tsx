@@ -6,7 +6,6 @@ import {
   Sparkles,
   AlertTriangle,
   Radio,
-  FileQuestion,
   Cpu,
   Settings,
 } from "lucide-react";
@@ -16,6 +15,7 @@ import { useSettingsStore } from "../../store/settingsStore";
 import { OpacityControl } from "./OpacityControl";
 import { LayoutSwitcher } from "./LayoutSwitcher";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
+import { QuestionBanner } from "../question/QuestionBanner";
 import { cn } from "../../lib/utils";
 
 interface HUDContainerProps {
@@ -218,32 +218,9 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
         ) : (
           /* Default Shell Content: Live question, progressive preview, or stealth status */
           <div className="space-y-3">
-            {/* Active Detected Question (Spec §4.2) */}
+            {/* Active Detected Question (Spec §4.2, REQ-011, REQ-012) */}
             {activeQuestion ? (
-              <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3.5 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs font-medium text-emerald-400">
-                    <FileQuestion className="h-3.5 w-3.5" />
-                    <span>Live Detected Question</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-zinc-500">
-                    Confidence: {(activeQuestion.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <p className="text-sm font-medium text-zinc-100 leading-snug">
-                  {activeQuestion.extractedQuestion}
-                </p>
-                {activeQuestion.quickPointers.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs text-zinc-300">
-                    {activeQuestion.quickPointers.map((ptr, idx) => (
-                      <li key={idx} className="flex items-start gap-2">
-                        <span className="text-emerald-400 font-bold">•</span>
-                        <span>{ptr}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+              <QuestionBanner variant="hud" />
             ) : (
               /* Idle Stealth Copilot Status Card */
               <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-3.5 space-y-2.5">

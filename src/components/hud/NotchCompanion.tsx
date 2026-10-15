@@ -3,7 +3,6 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
-  FileQuestion,
   AlertTriangle,
   MousePointer,
   Radio,
@@ -14,6 +13,7 @@ import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { LayoutSwitcher } from "./LayoutSwitcher";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
+import { QuestionBanner } from "../question/QuestionBanner";
 import { cn } from "../../lib/utils";
 
 interface NotchCompanionProps {
@@ -238,35 +238,9 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
             </div>
           )}
 
-          {/* Active Detected Question Card */}
+          {/* Active Detected Question Card (REQ-011, REQ-012) */}
           {activeQuestion ? (
-            <div
-              data-testid="notch-question-card"
-              className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-2.5 space-y-2"
-            >
-              <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
-                  <FileQuestion className="h-3 w-3" />
-                  <span>Detected Question</span>
-                </div>
-                <span className="text-[10px] font-mono text-zinc-500">
-                  {(activeQuestion.confidence * 100).toFixed(0)}% Match
-                </span>
-              </div>
-              <p className="text-xs font-medium text-zinc-100 leading-snug">
-                {activeQuestion.extractedQuestion}
-              </p>
-              {activeQuestion.quickPointers.length > 0 && (
-                <ul className="space-y-1 pt-1 border-t border-zinc-800/60 text-[11px] text-zinc-300">
-                  {activeQuestion.quickPointers.map((ptr, idx) => (
-                    <li key={idx} className="flex items-start gap-1.5">
-                      <span className="text-emerald-400 font-bold shrink-0">•</span>
-                      <span>{ptr}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            <QuestionBanner variant="notch" testId="notch-question-card" />
           ) : (
             /* Idle Notch State Info */
             <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-2.5 space-y-1.5">

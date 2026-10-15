@@ -5,6 +5,7 @@ import { NotchCompanion } from "./components/hud/NotchCompanion";
 import { SettingsDrawer } from "./components/settings/SettingsDrawer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
+import { useQuestionDetector } from "./hooks/useQuestionDetector";
 import { setSttEngine } from "./lib/ipc";
 import { cn } from "./lib/utils";
 
@@ -12,6 +13,9 @@ export default function App() {
   const syncFromBackend = useAppStore((state) => state.syncFromBackend);
   const opacity = useAppStore((state) => state.opacity);
   const layoutMode = useAppStore((state) => state.layoutMode);
+
+  // Initialize live question detection and Enter / Cmd+Enter hotkeys (REQ-011, REQ-012)
+  useQuestionDetector();
 
   useEffect(() => {
     // 1. Initial state synchronization with Tauri backend

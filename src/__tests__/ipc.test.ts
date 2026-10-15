@@ -75,4 +75,10 @@ describe("IPC Helper Library", () => {
     const result = await downloadSttModel("tiny.en");
     expect(result).toBeNull();
   });
+
+  it("handles safeEmit fallback gracefully outside Tauri", async () => {
+    const { safeEmit } = await import("../lib/ipc");
+    const result = await safeEmit("sidekick://test_event", { data: 123 });
+    expect(result).toBe(false);
+  });
 });
