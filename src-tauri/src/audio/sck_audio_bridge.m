@@ -149,10 +149,8 @@ struct SCKAudioBridgeHandle {
 };
 
 bool sck_audio_is_supported(void) {
-    if (@available(macOS 13.0, *)) {
-        return true;
-    }
-    return false;
+    NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+    return (v.majorVersion > 13) || (v.majorVersion == 13 && v.minorVersion >= 0);
 }
 
 bool sck_audio_has_permission(void) {

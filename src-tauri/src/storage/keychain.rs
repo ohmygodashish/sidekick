@@ -92,14 +92,9 @@ pub fn store_credential_for_service(
                 set_fallback(provider, trimmed);
                 Ok(())
             }
-            Err(e) => {
-                // In headless CI or sandboxed tests where Keychain daemon is restricted, fallback to in-memory store
-                eprintln!(
-                    "[Keychain] Warning: set_generic_password('{service}', '{provider}') returned {e:?}. Falling back to in-memory store."
-                );
-                set_fallback(provider, trimmed);
-                Ok(())
-            }
+            Err(e) => Err(format!(
+                "Failed to store credential in Keychain for '{service}'/'{provider}': {e}"
+            )),
         }
     }
 
@@ -272,6 +267,9 @@ mod tests {
 
     #[test]
     fn test_service_level_isolation() {
+        set_mock_mode(true);
+        clear_fallback();
+
         let _ = delete_credential_for_service(TEST_SERVICE, "test_provider");
 
         // Store
@@ -285,5 +283,18 @@ mod tests {
         let after_delete =
             retrieve_credential_for_service(TEST_SERVICE, "test_provider").unwrap();
         assert_eq!(after_delete, "");
+
+        set_mock_mode(false);
+    }
+
+    #[test]
+    fn test_non_mock_error_propagated() {
+        set_mock_mode(false);
+        // In sandboxed/headless test runner, real Keychain store without interactive prompt returns an Err
+        let result = store_credential_for_service("com.sidekick.test.dummy", "dummy", "secret");
+        if let Err(err_msg) = result {
+            assert!(err_msg.contains("Failed to store credential in Keychain"));
+        }
+        set_mock_mode(false);
     }
 }

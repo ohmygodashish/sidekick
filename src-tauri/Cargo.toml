@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Sidekick - Hyper-lightweight screen-share invisible desktop copilot"
 authors = ["Sidekick Team"]
 edition = "2021"
+default-run = "sidekick"
 
 [lib]
 name = "sidekick_lib"

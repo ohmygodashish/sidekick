@@ -64,6 +64,9 @@ pub fn run() {
         .manage(audio::AudioState::default())
         .plugin(hotkey_plugin)
         .setup(|app| {
+            // Ensure local ephemeral session.db exists
+            let _ = storage::db::open_session_db();
+
             #[cfg(target_os = "macos")]
             {
                 // 1. Configure headless phantom accessory policy (zero Dock icon, excluded from Cmd+Tab, zero tray)

@@ -10,6 +10,8 @@ fn main() {
         cc::Build::new()
             .file("src/audio/sck_audio_bridge.m")
             .flag("-fobjc-arc")
+            .flag("-mmacosx-version-min=13.0")
+            .flag("-Wno-unguarded-availability-new")
             .compile("sck_audio_bridge");
     }
 

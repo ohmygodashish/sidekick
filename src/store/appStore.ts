@@ -199,6 +199,15 @@ export async function setupAppEventListeners(): Promise<() => void> {
       }
     });
     unlisteners.push(unlistenStt);
+
+    // 7. Session Burned event (sidekick://session_burned)
+    const unlistenBurned = await listen<{ timestamp?: number }>(
+      "sidekick://session_burned",
+      () => {
+        useSessionStore.getState().clearSession();
+      }
+    );
+    unlisteners.push(unlistenBurned);
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.warn("[Sidekick Events] Failed to bind Tauri event listeners:", err);

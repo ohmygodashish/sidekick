@@ -77,4 +77,33 @@ describe("useAppStore", () => {
     expect(typeof unlisten).toBe("function");
     expect(() => unlisten()).not.toThrow();
   });
+
+  it("should clear sessionStore on sidekick://session_burned event", async () => {
+    const eventHandlers = new Map<string, (event: any) => void>();
+    const { vi } = await import("vitest");
+    const { useSessionStore } = await import("../store/sessionStore");
+
+    vi.doMock("@tauri-apps/api/event", () => ({
+      listen: vi.fn(async (eventName: string, handler: (e: any) => void) => {
+        eventHandlers.set(eventName, handler);
+        return () => eventHandlers.delete(eventName);
+      }),
+    }));
+
+    useSessionStore.getState().addTranscriptTurn({
+      speaker: "interviewer",
+      text: "Explain Paxos consensus",
+      timestamp: 12345,
+    });
+    expect(useSessionStore.getState().transcript.length).toBeGreaterThan(0);
+
+    const unlisten = await setupAppEventListeners();
+    const burnedHandler = eventHandlers.get("sidekick://session_burned");
+    if (burnedHandler) {
+      burnedHandler({ payload: {} });
+      expect(useSessionStore.getState().transcript.length).toBe(0);
+    }
+    unlisten();
+    vi.doUnmock("@tauri-apps/api/event");
+  });
 });
