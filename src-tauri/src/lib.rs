@@ -1,6 +1,7 @@
 //! Sidekick Core Library
 
 pub mod appkit;
+pub mod capture;
 pub mod hotkeys;
 
 use tauri::Manager;
@@ -29,6 +30,7 @@ fn burn_session() -> Result<(), String> {
     Ok(())
 }
 
+use capture::capture_active_window;
 use hotkeys::commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,6 +41,7 @@ pub fn run() {
             hotkeys::SHORTCUT_TOGGLE_VISIBILITY,
             hotkeys::SHORTCUT_TOGGLE_CLICK_THROUGH,
             hotkeys::SHORTCUT_TOGGLE_LAYOUT_MODE,
+            hotkeys::SHORTCUT_CAPTURE_ACTIVE_WINDOW,
         ])
         .expect("failed to configure default global shortcuts")
         .with_handler(|app, shortcut, event| {
@@ -75,6 +78,7 @@ pub fn run() {
             store_api_key,
             retrieve_api_key,
             burn_session,
+            capture_active_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

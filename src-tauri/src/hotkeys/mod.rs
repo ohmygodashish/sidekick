@@ -22,6 +22,7 @@ pub const SHORTCUT_PANIC: &str = "Super+Escape";
 pub const SHORTCUT_TOGGLE_VISIBILITY: &str = "Super+Shift+Space";
 pub const SHORTCUT_TOGGLE_CLICK_THROUGH: &str = "Super+Shift+C";
 pub const SHORTCUT_TOGGLE_LAYOUT_MODE: &str = "Super+Shift+M";
+pub const SHORTCUT_CAPTURE_ACTIVE_WINDOW: &str = "Super+Shift+S";
 
 /// Event names emitted to frontend
 pub const EVENT_PANIC: &str = "sidekick://panic";
@@ -29,6 +30,7 @@ pub const EVENT_VISIBILITY_TOGGLED: &str = "sidekick://visibility_toggled";
 pub const EVENT_CLICK_THROUGH_TOGGLED: &str = "sidekick://click_through_toggled";
 pub const EVENT_TOGGLE_LAYOUT_MODE: &str = "sidekick://toggle_layout_mode";
 pub const EVENT_OPACITY_CHANGED: &str = "sidekick://opacity_changed";
+pub const EVENT_ACTIVE_WINDOW_CAPTURED: &str = "sidekick://active_window_captured";
 
 /// Layout display modes supported by Sidekick
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +92,8 @@ pub enum SidekickAction {
     ToggleClickThrough,
     /// Toggle layout mode between Floating HUD and Dynamic Notch
     ToggleLayoutMode,
+    /// Silently capture frontmost active application window
+    CaptureActiveWindow,
 }
 
 /// Resolves a parsed `Shortcut` into the matching `SidekickAction`
@@ -102,6 +106,8 @@ pub fn resolve_action(shortcut: &Shortcut) -> Option<SidekickAction> {
         Some(SidekickAction::ToggleClickThrough)
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyM) {
         Some(SidekickAction::ToggleLayoutMode)
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyS) {
+        Some(SidekickAction::CaptureActiveWindow)
     } else {
         None
     }
@@ -176,6 +182,19 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
                 if let Err(e) = toggle_layout_mode(app, &state) {
                     eprintln!("[Sidekick Hotkeys] Failed to toggle layout mode: {e}");
                 }
+            }
+            SidekickAction::CaptureActiveWindow => {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match crate::capture::capture_frontmost_window() {
+                        Ok(capture) => {
+                            let _ = app_handle.emit(EVENT_ACTIVE_WINDOW_CAPTURED, &capture);
+                        }
+                        Err(e) => {
+                            eprintln!("[Sidekick Hotkeys] Failed to capture active window: {e}");
+                        }
+                    }
+                });
             }
         }
     }
@@ -472,6 +491,18 @@ mod tests {
 
         let s2: Shortcut = "Cmd+Shift+M".parse().expect("Failed to parse Cmd+Shift+M");
         assert_eq!(resolve_action(&s2), Some(SidekickAction::ToggleLayoutMode));
+    }
+
+    #[test]
+    fn test_resolve_action_capture_active_window() {
+        let s1: Shortcut = SHORTCUT_CAPTURE_ACTIVE_WINDOW.parse().expect("Failed to parse capture shortcut");
+        assert_eq!(resolve_action(&s1), Some(SidekickAction::CaptureActiveWindow));
+
+        let s2: Shortcut = "Cmd+Shift+S".parse().expect("Failed to parse Cmd+Shift+S");
+        assert_eq!(resolve_action(&s2), Some(SidekickAction::CaptureActiveWindow));
+
+        let s3: Shortcut = "Super+Shift+KeyS".parse().expect("Failed to parse Super+Shift+KeyS");
+        assert_eq!(resolve_action(&s3), Some(SidekickAction::CaptureActiveWindow));
     }
 
     #[test]
