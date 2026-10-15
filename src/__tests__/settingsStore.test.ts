@@ -73,4 +73,18 @@ describe("useSettingsStore", () => {
     expect(state.apiKeys.groq).toBe("");
     expect(state.profile.seniorityPreset).toBe("senior");
   });
+
+  it("should exclude apiKeys from localStorage per SEC-001 partialize rule", () => {
+    useSettingsStore.getState().setApiKey("openai", "sk-secret-test-key-should-not-persist");
+    useSettingsStore.getState().setSelectedModel("gpt-4o");
+
+    const raw = localStorage.getItem("sidekick-settings");
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw!);
+    // State in localStorage must not have apiKeys
+    expect(parsed.state.apiKeys).toBeUndefined();
+    expect(parsed.state.selectedModel).toBe("gpt-4o");
+    // In-memory state still retains the key
+    expect(useSettingsStore.getState().apiKeys.openai).toBe("sk-secret-test-key-should-not-persist");
+  });
 });

@@ -124,6 +124,12 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "sidekick-settings",
       storage: createJSONStorage(() => localStorage),
+      partialize: (state) => {
+        // Exclude apiKeys from localStorage per Global Constraint #5 & SEC-001.
+        // API keys remain strictly in-memory until Task 13 wires native macOS Keychain.
+        const { apiKeys: _ignored, ...persistedState } = state;
+        return persistedState;
+      },
     }
   )
 );

@@ -4,8 +4,6 @@ import {
   ShieldAlert,
   MousePointer,
   Sparkles,
-  Maximize2,
-  Minimize2,
   AlertTriangle,
   Radio,
   FileQuestion,
@@ -17,6 +15,8 @@ import { useAppStore } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { OpacityControl } from "./OpacityControl";
+import { LayoutSwitcher } from "./LayoutSwitcher";
+import { cn } from "../../lib/utils";
 
 interface HUDContainerProps {
   children?: React.ReactNode;
@@ -25,13 +25,12 @@ interface HUDContainerProps {
 
 export const HUDContainer: React.FC<HUDContainerProps> = ({
   children,
-  className = "",
+  className,
 }) => {
   const {
     layoutMode,
     isClickThrough,
     isPanicked,
-    toggleLayoutMode,
     toggleClickThrough,
     triggerPanic,
     resetPanic,
@@ -51,9 +50,11 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
   return (
     <div
       data-testid="hud-container"
-      className={`relative flex flex-col w-full max-w-2xl mx-auto rounded-2xl border border-zinc-800/60 bg-zinc-950/80 shadow-2xl backdrop-blur-md overflow-hidden select-none text-zinc-100 transition-all duration-300 isolate ${
-        isNotchMode ? "ring-1 ring-sky-500/20" : ""
-      } ${className}`}
+      className={cn(
+        "relative flex flex-col w-full max-w-2xl mx-auto rounded-2xl border border-zinc-800/60 bg-zinc-950/80 shadow-2xl backdrop-blur-md overflow-hidden select-none text-zinc-100 transition-all duration-300 isolate",
+        isNotchMode && "ring-1 ring-sky-500/20",
+        className
+      )}
     >
       {/* Draggable Header Bar */}
       <header
@@ -64,11 +65,12 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
         {/* Left: Branding & Invisibility Indicator */}
         <div className="flex items-center gap-2.5 pointer-events-none">
           <div
-            className={`flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-lg border transition-colors",
               isPanicked
                 ? "bg-red-500/10 border-red-500/30 text-red-400"
                 : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-            }`}
+            )}
           >
             {isPanicked ? (
               <ShieldAlert className="h-4 w-4 animate-bounce" />
@@ -82,18 +84,18 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
                 Sidekick
               </span>
               <span
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+                className={cn(
+                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border",
                   isPanicked
                     ? "bg-red-500/10 text-red-400 border-red-500/20"
                     : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                }`}
+                )}
               >
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    isPanicked
-                      ? "bg-red-400 animate-ping"
-                      : "bg-emerald-400 animate-pulse"
-                  }`}
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    isPanicked ? "bg-red-400 animate-ping" : "bg-emerald-400 animate-pulse"
+                  )}
                 />
                 {isPanicked ? "Panicked" : "Invisible"}
               </span>
@@ -114,11 +116,12 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
             type="button"
             onClick={() => toggleClickThrough()}
             title="Toggle Mouse Click-Through (Cmd + Shift + C)"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors",
               isClickThrough
                 ? "bg-amber-500/15 text-amber-300 border-amber-500/30 shadow-sm"
                 : "bg-zinc-900/60 text-zinc-400 border-zinc-800/60 hover:text-zinc-200 hover:border-zinc-700/60"
-            }`}
+            )}
           >
             <MousePointer className="h-3 w-3" />
             <span className="hidden sm:inline">
@@ -129,29 +132,8 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
             </kbd>
           </button>
 
-          {/* Layout Mode Badge */}
-          <button
-            type="button"
-            onClick={() => toggleLayoutMode()}
-            title="Toggle Floating HUD / Dynamic Notch (Cmd + Shift + M)"
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
-              isNotchMode
-                ? "bg-sky-500/15 text-sky-300 border-sky-500/30"
-                : "bg-zinc-900/60 text-zinc-400 border-zinc-800/60 hover:text-zinc-200 hover:border-zinc-700/60"
-            }`}
-          >
-            {isNotchMode ? (
-              <Minimize2 className="h-3 w-3" />
-            ) : (
-              <Maximize2 className="h-3 w-3" />
-            )}
-            <span className="hidden sm:inline">
-              {isNotchMode ? "Notch" : "HUD"}
-            </span>
-            <kbd className="hidden md:inline rounded bg-zinc-800/80 px-1 py-0.2 text-[9px] font-mono text-zinc-400 border border-zinc-700/40">
-              ⌘⇧M
-            </kbd>
-          </button>
+          {/* Layout Mode Switcher */}
+          <LayoutSwitcher />
 
           {/* Panic Key Killswitch Button */}
           <button

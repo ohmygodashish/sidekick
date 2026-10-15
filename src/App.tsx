@@ -1,6 +1,9 @@
 import { useEffect } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { HUDContainer } from "./components/hud/HUDContainer";
+import { NotchCompanion } from "./components/hud/NotchCompanion";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
+import { cn } from "./lib/utils";
 
 export default function App() {
   const syncFromBackend = useAppStore((state) => state.syncFromBackend);
@@ -26,17 +29,23 @@ export default function App() {
 
   const isNotch = layoutMode === "dynamic_notch";
 
+  // Check if running inside native Tauri webview
+  // Inside Tauri, window alpha is managed natively via macOS NSWindow setAlphaValue.
+  // Outside Tauri (e.g. browser, Vitest), apply CSS opacity fallback to avoid double-opacity attenuation.
+  const isRunningInTauri = typeof window !== "undefined" && isTauri();
+
   return (
     <div
-      className={`min-h-screen w-screen p-4 flex ${
-        isNotch ? "items-start justify-center pt-2" : "items-center justify-center"
-      } bg-transparent transition-all duration-300`}
-      style={{
-        // Web fallback for opacity styling when outside Tauri native window
-        opacity,
-      }}
+      data-testid="app-root"
+      className={cn(
+        "min-h-screen w-screen flex bg-transparent transition-all duration-300 ease-out select-none",
+        isNotch
+          ? "items-start justify-center pt-0 sm:pt-1 px-2"
+          : "items-center justify-center p-4"
+      )}
+      style={isRunningInTauri ? undefined : { opacity }}
     >
-      <HUDContainer />
+      {isNotch ? <NotchCompanion /> : <HUDContainer />}
     </div>
   );
 }
