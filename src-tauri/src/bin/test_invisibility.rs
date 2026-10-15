@@ -18,7 +18,7 @@ use cocoa::appkit::{
     NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
-use cocoa::base::{id, NO};
+use cocoa::base::{id, nil, NO};
 #[cfg(target_os = "macos")]
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
 #[cfg(target_os = "macos")]
@@ -145,10 +145,27 @@ fn main() -> ExitCode {
             assert_eq!(is_opaque, NO, "Native NSWindow isOpaque must be NO");
             println!("  ✓ Live NSWindow isOpaque confirmed = NO");
 
-            // Make window visible with a distinct magenta background
-            let magenta: id = msg_send![class!(NSColor), magentaColor];
+            // Make window visible with a distinct sRGB magenta background (#FF00FF)
+            let magenta: id = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed: 1.0f64
+                green: 0.0f64
+                blue: 1.0f64
+                alpha: 1.0f64
+            ];
+            let content_view: id = msg_send![window, contentView];
+            let _: () = msg_send![content_view, setWantsLayer: cocoa::base::YES];
+            let layer: id = msg_send![content_view, layer];
+            let cg_magenta: id = msg_send![magenta, CGColor];
+            let _: () = msg_send![layer, setBackgroundColor: cg_magenta];
             let _: () = msg_send![window, setBackgroundColor: magenta];
             let _: () = msg_send![window, orderFrontRegardless];
+            let _: () = msg_send![window, displayIfNeeded];
+
+            // Pump Cocoa runloop briefly so WindowServer composites the window before capture
+            let run_loop: id = msg_send![class!(NSRunLoop), currentRunLoop];
+            let date: id = msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: 0.20f64];
+            let _: () = msg_send![run_loop, runUntilDate: date];
 
             // ---------------------------------------------------------------------
             // 4. Automated Screen Capture Comparison & Zero Pixel Bleed Assertion
@@ -157,9 +174,22 @@ fn main() -> ExitCode {
             let main_display = CGMainDisplayID();
             println!("  ✓ Main display ID: {}", main_display);
 
+            // Translate Cocoa coordinate system (bottom-left origin) to Quartz CoreGraphics (top-left origin)
+            let screen: id = msg_send![class!(NSScreen), mainScreen];
+            let screen_height = if !screen.is_null() {
+                let screen_rect: NSRect = msg_send![screen, frame];
+                screen_rect.size.height
+            } else {
+                1080.0
+            };
+            let cg_y = screen_height - (frame.origin.y + frame.size.height);
             let capture_bounds = CGRect::new(
-                &CGPoint::new(150.0, 150.0),
-                &CGSize::new(200.0, 200.0),
+                &CGPoint::new(frame.origin.x, cg_y),
+                &CGSize::new(frame.size.width, frame.size.height),
+            );
+            println!("  ✓ Cocoa window frame: ({}, {}, {}x{}), Quartz capture bounds: ({}, {}, {}x{})",
+                frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                frame.origin.x, cg_y, frame.size.width, frame.size.height
             );
 
             // Capture the area while window has NSWindowSharingNone
@@ -209,6 +239,9 @@ fn main() -> ExitCode {
                 );
                 println!("  ✓ ZERO PIXEL BLEED CONFIRMED: 0 / {} pixels leaked (100.00% invisibility).", width * height);
 
+                // Order out stealth window so it cannot occlude the control window
+                let _: () = msg_send![window, orderOut: nil];
+
                 // Control comparison: instantiate a standard window with normal sharing (NSWindowSharingReadOnly = 1)
                 let control_window: id = msg_send![class!(NSWindow), alloc];
                 let control_window: id = msg_send![
@@ -223,8 +256,19 @@ fn main() -> ExitCode {
                     let normal_sharing_type: usize = msg_send![control_window, sharingType];
                     println!("  ✓ Control window instantiated with sharingType = {}", normal_sharing_type);
 
+                    let _: () = msg_send![control_window, setLevel: 3i64];
+                    let c_content: id = msg_send![control_window, contentView];
+                    let _: () = msg_send![c_content, setWantsLayer: cocoa::base::YES];
+                    let c_layer: id = msg_send![c_content, layer];
+                    let _: () = msg_send![c_layer, setBackgroundColor: cg_magenta];
                     let _: () = msg_send![control_window, setBackgroundColor: magenta];
                     let _: () = msg_send![control_window, orderFrontRegardless];
+                    let _: () = msg_send![control_window, displayIfNeeded];
+
+                    // Pump runloop so WindowServer composites control window
+                    let run_loop: id = msg_send![class!(NSRunLoop), currentRunLoop];
+                    let date: id = msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: 0.25f64];
+                    let _: () = msg_send![run_loop, runUntilDate: date];
 
                     let control_image = create_image(
                         capture_bounds,
@@ -253,7 +297,16 @@ fn main() -> ExitCode {
                             }
                         }
                         println!("  ✓ Control window (sharingType={}) detected magenta pixels: {}", normal_sharing_type, control_magenta);
-                        println!("  ✓ Invisibility assertion verified: sharingType=0 excludes, normal windows include visual output.");
+                        if control_magenta == 0 {
+                            let mid = (c_image.height() / 2) * c_bytes_per_row + (c_image.width() / 2) * bytes_per_pixel;
+                            println!("  [DEBUG] Center pixel values: b0={}, b1={}, b2={}, b3={}",
+                                c_bytes[mid], c_bytes[mid+1], c_bytes[mid+2], c_bytes[mid+3]);
+                        }
+                        assert!(
+                            control_magenta > 0,
+                            "Control window must be visible in screen capture (detected 0 magenta pixels)"
+                        );
+                        println!("  ✓ Invisibility assertion verified: sharingType=0 excludes (0 pixels), sharingType=1 includes ({} pixels).", control_magenta);
                     }
                     let _: () = msg_send![control_window, close];
                 }

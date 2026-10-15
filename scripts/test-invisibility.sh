@@ -91,6 +91,11 @@ cargo test --manifest-path "${PROJECT_ROOT}/src-tauri/Cargo.toml" appkit::window
 echo -e "  ${GREEN}✓${NC} AppKit unit tests passed."
 
 # 4. Native Cocoa & CoreGraphics Screen Capture Comparison
+# Note: Quartz CGWindowListCreateImage and macOS screencapture CLI are utilized rather than
+# interactive QuickTime Player or external ffmpeg capture because Quartz APIs are completely
+# headless-native, run deterministically in CI/automated testing pipelines, and evaluate the exact
+# CoreGraphics/WindowServer sharing state (NSWindowSharingNone) without triggering modal GUI dialogues
+# or requiring manual window selection prompts.
 echo -e "\n${BLUE}[4/5] Executing automated native invisibility and zero-pixel-bleed test...${NC}"
 cargo run --manifest-path "${PROJECT_ROOT}/src-tauri/Cargo.toml" --bin test_invisibility
 
