@@ -15,6 +15,7 @@ export default function App() {
   useEffect(() => {
     // 1. Initial state synchronization with Tauri backend
     syncFromBackend();
+    useSettingsStore.getState().loadApiKeysFromBackend();
 
     // 2. Setup hotkey and window event listeners
     let cleanupFn: (() => void) | undefined;

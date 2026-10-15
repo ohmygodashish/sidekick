@@ -34,7 +34,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 }) => {
   const storeIsOpen = useSettingsStore((s) => s.isSettingsOpen);
   const setIsSettingsOpen = useSettingsStore((s) => s.setIsSettingsOpen);
-  const toggleSettings = useSettingsStore((s) => s.toggleSettings);
   const resetSettings = useSettingsStore((s) => s.resetSettings);
   const sttMode = useSettingsStore((s) => s.sttMode);
   const setSttMode = useSettingsStore((s) => s.setSttMode);
@@ -48,13 +47,12 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [burnFeedback, setBurnFeedback] = useState<string | null>(null);
   const [resetFeedback, setResetFeedback] = useState<string | null>(null);
 
-  // Global hotkey: Cmd + , to toggle, Escape to close
+  // Escape key to dismiss settings when open (ignoring Cmd/Ctrl to not interfere with Panic killswitch)
   useEffect(() => {
+    if (!isOpen) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        toggleSettings();
-      } else if (e.key === "Escape" && isOpen) {
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         handleClose();
       }
@@ -62,7 +60,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, toggleSettings, handleClose]);
+  }, [isOpen, handleClose]);
 
   // Burn Session Action (REQ-017)
   const handleBurnSession = async () => {

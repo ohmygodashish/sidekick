@@ -74,17 +74,12 @@ export const ProfileEditor: React.FC = () => {
 
   const processFile = async (file: File) => {
     try {
-      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        // Read text content or set descriptor
-        const text = await file.text().catch(() => "");
-        if (text && text.length > 50) {
-          setProfile({ resumeText: text });
-        } else {
-          setProfile({
-            resumeText: `[Resume uploaded: ${file.name} (${Math.round(file.size / 1024)} KB)]\n` +
-              `Candidate experience parsed from PDF. Add any additional notes here.`,
-          });
-        }
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        // Do not decode binary PDF bytecode via file.text()
+        const sizeKb = Math.round(file.size / 1024);
+        setProfile({
+          resumeText: `[PDF File Attached: ${file.name} (${sizeKb} KB) - paste extracted text below if needed]`,
+        });
       } else {
         const text = await file.text();
         setProfile({ resumeText: text });

@@ -116,9 +116,8 @@ export const useSettingsStore = create<SettingsState>()(
       saveAllApiKeysToBackend: async () => {
         const keys = get().apiKeys;
         for (const [provider, key] of Object.entries(keys)) {
-          if (key) {
-            await safeInvoke("store_api_key", { provider, key });
-          }
+          // Always propagate key to backend, including empty/cleared strings (""), so deleted keys are wiped
+          await safeInvoke("store_api_key", { provider, key: (key || "").trim() });
         }
       },
 

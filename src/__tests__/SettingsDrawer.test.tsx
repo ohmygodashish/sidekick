@@ -64,25 +64,16 @@ describe("SettingsDrawer & Personalization Manager", () => {
       expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
     });
 
-    it("closes drawer when pressing Escape key", () => {
+    it("closes drawer when pressing Escape key, but preserves drawer on Cmd+Escape (panic key)", () => {
       useSettingsStore.setState({ isSettingsOpen: true });
       render(<SettingsDrawer />);
 
-      fireEvent.keyDown(window, { key: "Escape" });
-
-      expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
-    });
-
-    it("toggles drawer when pressing Cmd + , hotkey", () => {
-      useSettingsStore.setState({ isSettingsOpen: false });
-      render(<SettingsDrawer isOpen={false} />);
-
-      // Press Cmd + ,
-      fireEvent.keyDown(window, { key: ",", metaKey: true });
+      // Cmd + Escape should NOT close settings drawer (reserved for Panic)
+      fireEvent.keyDown(window, { key: "Escape", metaKey: true });
       expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
 
-      // Press Cmd + , again
-      fireEvent.keyDown(window, { key: ",", metaKey: true });
+      // Plain Escape closes settings drawer
+      fireEvent.keyDown(window, { key: "Escape" });
       expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
     });
 
@@ -230,6 +221,11 @@ describe("SettingsDrawer & Personalization Manager", () => {
         provider: "openai",
         key: "sk-proj-valid-openai-key",
       });
+      // Cleared/empty keys must also be propagated to prevent stale persistence
+      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", {
+        provider: "anthropic",
+        key: "",
+      });
 
       expect(screen.getByText("Saved!")).toBeDefined();
     });
@@ -310,6 +306,30 @@ describe("SettingsDrawer & Personalization Manager", () => {
         expect(useSettingsStore.getState().profile.resumeText).toContain(
           "Senior Staff Engineer with deep expertise"
         );
+      });
+    });
+
+    it("handles binary PDF drop safely with formatted note instead of binary bytecode", async () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="profile" />);
+
+      const dropzone = screen.getByTestId("resume-dropzone");
+
+      const mockPdf = new File(["%PDF-1.4 raw binary bytecode"], "resume.pdf", {
+        type: "application/pdf",
+      });
+
+      await act(async () => {
+        fireEvent.drop(dropzone, {
+          dataTransfer: {
+            files: [mockPdf],
+          },
+        });
+      });
+
+      await waitFor(() => {
+        const text = useSettingsStore.getState().profile.resumeText;
+        expect(text).toContain("[PDF File Attached: resume.pdf");
+        expect(text).not.toContain("%PDF-1.4");
       });
     });
 

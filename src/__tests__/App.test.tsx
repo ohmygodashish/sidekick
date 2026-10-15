@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import App from "../App";
 import { useAppStore } from "../store/appStore";
+import { useSettingsStore } from "../store/settingsStore";
 
 describe("App", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     useAppStore.setState({
       layoutMode: "floating_hud",
       opacity: 0.75,
@@ -12,6 +14,7 @@ describe("App", () => {
       isVisible: true,
       isPanicked: false,
     });
+    useSettingsStore.getState().resetSettings();
   });
 
   it("renders HUDContainer when layoutMode is floating_hud", () => {
@@ -36,5 +39,28 @@ describe("App", () => {
 
     const root = screen.getByTestId("app-root");
     expect(root.className).toContain("items-start justify-center");
+  });
+
+  it("toggles SettingsDrawer when pressing Cmd + , hotkey", () => {
+    useSettingsStore.setState({ isSettingsOpen: false });
+    render(<App />);
+
+    expect(screen.queryByTestId("settings-drawer")).toBeNull();
+
+    // Press Cmd + ,
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
+    expect(screen.getByTestId("settings-drawer")).toBeDefined();
+
+    // Press Cmd + , again
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
+    expect(screen.queryByTestId("settings-drawer")).toBeNull();
+  });
+
+  it("invokes loadApiKeysFromBackend on initial mount", () => {
+    const loadSpy = vi.spyOn(useSettingsStore.getState(), "loadApiKeysFromBackend");
+    render(<App />);
+    expect(loadSpy).toHaveBeenCalled();
   });
 });
