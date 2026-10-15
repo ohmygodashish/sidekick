@@ -282,8 +282,8 @@ impl SttDispatcher {
 
     /// Groq Whisper cloud transcription dispatcher with offline fallback
     fn transcribe_groq_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
-        // Attempt Groq API if key is present in Keychain
-        if let Ok(key) = crate::storage::keychain::retrieve_credential("groq") {
+        // Attempt Groq API if a key is saved in the config file
+        if let Ok(key) = crate::storage::config::retrieve_api_key("groq") {
             let key = key.trim();
             if !key.is_empty() {
                 match call_groq_whisper_api(key, &chunk.samples, chunk.sample_rate) {
@@ -303,8 +303,8 @@ impl SttDispatcher {
 
     /// Deepgram Nova-2 cloud transcription dispatcher with offline fallback
     fn transcribe_deepgram_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
-        // Attempt Deepgram API if token is present in Keychain
-        if let Ok(key) = crate::storage::keychain::retrieve_credential("deepgram") {
+        // Attempt Deepgram API if a token is saved in the config file
+        if let Ok(key) = crate::storage::config::retrieve_api_key("deepgram") {
             let key = key.trim();
             if !key.is_empty() {
                 match call_deepgram_api(key, &chunk.samples, chunk.sample_rate) {

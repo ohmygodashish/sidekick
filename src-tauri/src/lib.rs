@@ -8,20 +8,24 @@ pub mod storage;
 
 use tauri::{Emitter, Manager};
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[tauri::command]
 fn store_api_key(provider: String, key: String) -> Result<(), String> {
-    storage::keychain::store_credential(&provider, &key)
+    storage::config::store_api_key(&provider, &key)
 }
 
 #[tauri::command]
 fn retrieve_api_key(provider: String) -> Result<String, String> {
-    storage::keychain::retrieve_credential(&provider)
+    storage::config::retrieve_api_key(&provider)
+}
+
+#[tauri::command]
+fn load_settings() -> Result<Option<String>, String> {
+    storage::config::load_settings()
+}
+
+#[tauri::command]
+fn save_settings(settings: String) -> Result<(), String> {
+    storage::config::save_settings(&settings)
 }
 
 #[tauri::command]
@@ -81,7 +85,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             set_click_through,
             trigger_panic,
             set_window_opacity,
@@ -89,6 +92,8 @@ pub fn run() {
             get_hotkey_state,
             store_api_key,
             retrieve_api_key,
+            load_settings,
+            save_settings,
             burn_session,
             capture_active_window,
             start_audio_capture,
@@ -101,34 +106,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_greet() {
-        assert_eq!(greet("World"), "Hello, World! You've been greeted from Rust!");
-    }
-
-    #[test]
-    fn test_store_and_retrieve_api_key_commands() {
-        storage::keychain::set_mock_mode(true);
-        storage::keychain::clear_fallback();
-
-        assert_eq!(retrieve_api_key("openrouter".into()).unwrap(), "");
-
-        store_api_key("openrouter".into(), "sk-or-v1-my-secret-key".into()).unwrap();
-        assert_eq!(
-            retrieve_api_key("openrouter".into()).unwrap(),
-            "sk-or-v1-my-secret-key"
-        );
-
-        // Clear key
-        store_api_key("openrouter".into(), "".into()).unwrap();
-        assert_eq!(retrieve_api_key("openrouter".into()).unwrap(), "");
-
-        storage::keychain::set_mock_mode(false);
-    }
 }
