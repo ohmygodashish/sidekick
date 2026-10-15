@@ -8,6 +8,7 @@ import {
   Radio,
   FileQuestion,
   Cpu,
+  Settings,
 } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
@@ -42,7 +43,7 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
     stage3Analysis,
   } = useSessionStore();
 
-  const { sttMode, selectedModel } = useSettingsStore();
+  const { sttMode, selectedModel, toggleSettings } = useSettingsStore();
 
   const isNotchMode = layoutMode === "dynamic_notch";
 
@@ -133,6 +134,22 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
 
           {/* Layout Mode Switcher */}
           <LayoutSwitcher />
+
+          {/* Settings Drawer Button */}
+          <button
+            type="button"
+            data-testid="hud-settings-btn"
+            onClick={() => toggleSettings()}
+            title="Settings & Personalization (Cmd + ,)"
+            aria-label="Open Settings"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-zinc-900/60 text-zinc-400 border border-zinc-800/60 hover:text-zinc-200 hover:border-zinc-700/60 transition-colors"
+          >
+            <Settings className="h-3 w-3" />
+            <span className="hidden sm:inline">Settings</span>
+            <kbd className="hidden md:inline rounded bg-zinc-800/80 px-1 py-0.2 text-[9px] font-mono text-zinc-400 border border-zinc-700/40">
+              ⌘,
+            </kbd>
+          </button>
 
           {/* Panic Key Killswitch Button */}
           <button
@@ -277,6 +294,9 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
           </span>
           <span>
             Layout: <kbd className="rounded bg-zinc-900 px-1 py-0.5 text-zinc-400 border border-zinc-800">⌘⇧M</kbd>
+          </span>
+          <span>
+            Settings: <kbd className="rounded bg-zinc-900 px-1 py-0.5 text-zinc-400 border border-zinc-800">⌘,</kbd>
           </span>
         </div>
         <div>

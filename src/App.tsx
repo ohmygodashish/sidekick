@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { HUDContainer } from "./components/hud/HUDContainer";
 import { NotchCompanion } from "./components/hud/NotchCompanion";
+import { SettingsDrawer } from "./components/settings/SettingsDrawer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
+import { useSettingsStore } from "./store/settingsStore";
 import { cn } from "./lib/utils";
 
 export default function App() {
@@ -20,10 +22,20 @@ export default function App() {
       cleanupFn = unlisten;
     });
 
+    // 3. Global settings hotkey: Cmd + ,
+    const handleSettingsHotkey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        useSettingsStore.getState().toggleSettings();
+      }
+    };
+    window.addEventListener("keydown", handleSettingsHotkey);
+
     return () => {
       if (cleanupFn) {
         cleanupFn();
       }
+      window.removeEventListener("keydown", handleSettingsHotkey);
     };
   }, [syncFromBackend]);
 
@@ -51,6 +63,9 @@ export default function App() {
       >
         {isNotch ? <NotchCompanion /> : <HUDContainer />}
       </div>
+
+      {/* Settings Sliding Overlay (REQ-002, REQ-016) */}
+      <SettingsDrawer />
     </div>
   );
 }

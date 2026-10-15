@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeInvoke } from "../lib/ipc";
 
 export type LayoutMode = "floating_hud" | "dynamic_notch";
 
@@ -19,22 +20,6 @@ export interface AppState {
   triggerPanic: () => Promise<void>;
   resetPanic: () => void;
   syncFromBackend: () => Promise<void>;
-}
-
-/**
- * Safely invokes a Tauri IPC command.
- * Gracefully falls back if running in browser/test environment.
- */
-async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<T>(cmd, args);
-  } catch (err) {
-    if (process.env.NODE_ENV !== "test") {
-      console.warn(`[Sidekick IPC] '${cmd}' failed or running outside Tauri context:`, err);
-    }
-    return null;
-  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({

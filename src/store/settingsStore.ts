@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { safeInvoke } from "../lib/ipc";
 
 export type ApiProvider =
   | "openrouter"
@@ -13,7 +14,12 @@ export type SttMode = "whisper_local" | "deepgram" | "groq";
 
 export type SeniorityPreset = "junior" | "mid" | "senior" | "staff" | "principal";
 
-export type TonePreset = "concise" | "balanced" | "deep";
+export type TonePreset =
+  | "concise"
+  | "balanced"
+  | "deep"
+  | "staff"
+  | "system_architect";
 
 export interface PersonalizationProfile {
   resumeText: string;
@@ -38,8 +44,14 @@ export interface SettingsState {
   // Speech-to-Text Configuration
   sttMode: SttMode;
 
+  // UI Drawer State
+  isSettingsOpen: boolean;
+
   // Actions
   setApiKey: (provider: ApiProvider, key: string) => void;
+  saveApiKeyToBackend: (provider: ApiProvider, key: string) => Promise<void>;
+  saveAllApiKeysToBackend: () => Promise<void>;
+  loadApiKeysFromBackend: () => Promise<void>;
   setSelectedProvider: (provider: ApiProvider) => void;
   setSelectedModel: (model: string) => void;
   setEvaluatorModel: (model: string) => void;
@@ -47,6 +59,8 @@ export interface SettingsState {
   setSeniority: (seniority: SeniorityPreset) => void;
   setTone: (tone: TonePreset) => void;
   setSttMode: (mode: SttMode) => void;
+  setIsSettingsOpen: (open: boolean) => void;
+  toggleSettings: () => void;
   resetSettings: () => void;
 }
 
@@ -72,11 +86,12 @@ const defaultState = {
   evaluatorModel: "groq/llama-3.3-70b-versatile",
   profile: defaultProfile,
   sttMode: "whisper_local" as SttMode,
+  isSettingsOpen: false,
 };
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...defaultState,
 
       setApiKey: (provider, key) =>
@@ -86,6 +101,45 @@ export const useSettingsStore = create<SettingsState>()(
             [provider]: key.trim(),
           },
         })),
+
+      saveApiKeyToBackend: async (provider, key) => {
+        const trimmed = key.trim();
+        set((state) => ({
+          apiKeys: {
+            ...state.apiKeys,
+            [provider]: trimmed,
+          },
+        }));
+        await safeInvoke("store_api_key", { provider, key: trimmed });
+      },
+
+      saveAllApiKeysToBackend: async () => {
+        const keys = get().apiKeys;
+        for (const [provider, key] of Object.entries(keys)) {
+          if (key) {
+            await safeInvoke("store_api_key", { provider, key });
+          }
+        }
+      },
+
+      loadApiKeysFromBackend: async () => {
+        const providers: ApiProvider[] = [
+          "openrouter",
+          "anthropic",
+          "openai",
+          "gemini",
+          "groq",
+          "deepgram",
+        ];
+        for (const p of providers) {
+          const val = await safeInvoke<string>("retrieve_api_key", { provider: p });
+          if (val) {
+            set((state) => ({
+              apiKeys: { ...state.apiKeys, [p]: val },
+            }));
+          }
+        }
+      },
 
       setSelectedProvider: (provider) => set({ selectedProvider: provider }),
 
@@ -119,6 +173,11 @@ export const useSettingsStore = create<SettingsState>()(
 
       setSttMode: (mode) => set({ sttMode: mode }),
 
+      setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
+
+      toggleSettings: () =>
+        set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),
+
       resetSettings: () => set(defaultState),
     }),
     {
@@ -127,7 +186,7 @@ export const useSettingsStore = create<SettingsState>()(
       partialize: (state) => {
         // Exclude apiKeys from localStorage per Global Constraint #5 & SEC-001.
         // API keys remain strictly in-memory until Task 13 wires native macOS Keychain.
-        const { apiKeys: _ignored, ...persistedState } = state;
+        const { apiKeys: _ignored, isSettingsOpen: _ignored2, ...persistedState } = state;
         return persistedState;
       },
     }

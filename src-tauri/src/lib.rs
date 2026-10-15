@@ -11,6 +11,24 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn store_api_key(_provider: String, _key: String) -> Result<(), String> {
+    // In-memory / keychain placeholder until Task 13 native Keychain integration
+    Ok(())
+}
+
+#[tauri::command]
+fn retrieve_api_key(_provider: String) -> Result<Option<String>, String> {
+    // In-memory / keychain placeholder until Task 13 native Keychain integration
+    Ok(None)
+}
+
+#[tauri::command]
+fn burn_session() -> Result<(), String> {
+    // Session context and buffer eradication placeholder
+    Ok(())
+}
+
 use hotkeys::commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -54,6 +72,9 @@ pub fn run() {
             set_window_opacity,
             set_layout_mode,
             get_hotkey_state,
+            store_api_key,
+            retrieve_api_key,
+            burn_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

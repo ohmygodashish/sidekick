@@ -7,9 +7,11 @@ import {
   AlertTriangle,
   MousePointer,
   Radio,
+  Settings,
 } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
+import { useSettingsStore } from "../../store/settingsStore";
 import { LayoutSwitcher } from "./LayoutSwitcher";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
 import { cn } from "../../lib/utils";
@@ -34,6 +36,8 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
     stage2Code,
     stage3Analysis,
   } = useSessionStore();
+
+  const toggleSettings = useSettingsStore((s) => s.toggleSettings);
 
   const [isHovered, setIsHovered] = useState(false);
   // Manual override: null = auto (hover or activeQuestion), true = explicitly opened, false = explicitly closed
@@ -179,6 +183,18 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
           {/* Layout Switcher (Switch to HUD) */}
           <LayoutSwitcher compact showHotkey={false} />
 
+          {/* Settings Drawer Button */}
+          <button
+            type="button"
+            data-testid="notch-settings-btn"
+            onClick={() => toggleSettings()}
+            title="Settings & Personalization (Cmd + ,)"
+            aria-label="Open Settings"
+            className="flex items-center justify-center h-6 w-6 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
+
           {/* Expand/Collapse Toggle Button */}
           <button
             type="button"
@@ -284,6 +300,17 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
               <MousePointer className="h-2.5 w-2.5" />
               <span>{isClickThrough ? "Click-Through" : "Clickable"}</span>
               <kbd className="font-mono text-[9px]">⌘⇧C</kbd>
+            </button>
+
+            <button
+              type="button"
+              data-testid="notch-toolbar-settings-btn"
+              onClick={() => toggleSettings()}
+              className="flex items-center gap-1 px-2 py-0.5 rounded border bg-zinc-900/60 text-zinc-400 border-zinc-800/60 hover:text-zinc-200 transition-colors"
+            >
+              <Settings className="h-2.5 w-2.5" />
+              <span>Settings</span>
+              <kbd className="font-mono text-[9px]">⌘,</kbd>
             </button>
 
             <button
