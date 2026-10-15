@@ -115,6 +115,45 @@ describe("NotchCompanion", () => {
     expect(screen.getByText("LRU eviction policy")).toBeDefined();
   });
 
+  it("allows manual collapse toggle to take precedence even when hovered or when activeQuestion exists", () => {
+    useSessionStore.getState().setActiveQuestion({
+      questionId: "q_override_test",
+      timestamp: Date.now(),
+      confidence: 0.99,
+      rawTranscript: "How would you implement LRU cache?",
+      extractedQuestion: "Implement LRU Cache in Python",
+      quickPointers: ["Doubly linked list", "Dict for O(1) lookup"],
+    });
+
+    render(<NotchCompanion />);
+
+    const companion = screen.getByTestId("notch-companion");
+    const expandBtn = screen.getByTestId("notch-expand-btn");
+
+    // Initially auto-expanded because activeQuestion is present
+    expect(companion.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("notch-expanded-content")).toBeDefined();
+
+    // Hover should keep it expanded
+    fireEvent.mouseEnter(companion);
+    expect(companion.getAttribute("aria-expanded")).toBe("true");
+
+    // Explicit manual toggle should COLLAPSE it even while hovered and question is active!
+    fireEvent.click(expandBtn);
+    expect(companion.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("notch-expanded-content")).toBeNull();
+
+    // Mouse leave and re-enter: should stay collapsed because of manual override
+    fireEvent.mouseLeave(companion);
+    fireEvent.mouseEnter(companion);
+    expect(companion.getAttribute("aria-expanded")).toBe("false");
+
+    // Clicking expand again should re-expand
+    fireEvent.click(expandBtn);
+    expect(companion.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("notch-expanded-content")).toBeDefined();
+  });
+
   it("renders progressive solution stages (intuition, code, complexity) when available", () => {
     useSessionStore.getState().setActiveQuestion({
       questionId: "q_algo",

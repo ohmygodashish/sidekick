@@ -1,12 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Sparkles,
   ChevronDown,
   ChevronUp,
   FileQuestion,
-  Lightbulb,
-  Code2,
-  Cpu,
   AlertTriangle,
   MousePointer,
   Radio,
@@ -14,6 +11,7 @@ import {
 import { useAppStore } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { LayoutSwitcher } from "./LayoutSwitcher";
+import { ProgressiveCard } from "../cards/ProgressiveCard";
 import { cn } from "../../lib/utils";
 
 interface NotchCompanionProps {
@@ -38,10 +36,29 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
   } = useSessionStore();
 
   const [isHovered, setIsHovered] = useState(false);
-  const [isManuallyExpanded, setIsManuallyExpanded] = useState(false);
+  // Manual override: null = auto (hover or activeQuestion), true = explicitly opened, false = explicitly closed
+  const [manualOverride, setManualOverride] = useState<boolean | null>(null);
 
-  // Automatically expand if a question is detected, hovered, or manually toggled
-  const isExpanded = isHovered || isManuallyExpanded || Boolean(activeQuestion);
+  // When a new question is detected, reset manual override to auto-expand
+  const activeQuestionId = activeQuestion?.questionId;
+  useEffect(() => {
+    setManualOverride(null);
+  }, [activeQuestionId]);
+
+  // Determine expansion: explicit manual override takes top precedence
+  const isExpanded =
+    manualOverride !== null
+      ? manualOverride
+      : isHovered || Boolean(activeQuestion);
+
+  const toggleManualExpansion = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setManualOverride((prev) => {
+      const currentlyExpanded =
+        prev !== null ? prev : isHovered || Boolean(activeQuestion);
+      return !currentlyExpanded;
+    });
+  };
 
   // Determine current active speaker from transcript
   const lastTurn = transcript.length > 0 ? transcript[transcript.length - 1] : null;
@@ -166,7 +183,7 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
           <button
             type="button"
             data-testid="notch-expand-btn"
-            onClick={() => setIsManuallyExpanded((prev) => !prev)}
+            onClick={toggleManualExpansion}
             title={isExpanded ? "Collapse Notch Companion" : "Expand Notch Companion"}
             aria-label={isExpanded ? "Collapse Notch Companion" : "Expand Notch Companion"}
             className="flex items-center justify-center h-6 w-6 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
@@ -247,76 +264,9 @@ export const NotchCompanion: React.FC<NotchCompanionProps> = ({ className }) => 
             </div>
           )}
 
-          {/* Progressive Solution Stages */}
-          {stage1Intuition && (
-            <div
-              data-testid="notch-stage1-card"
-              className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 p-2.5 space-y-1"
-            >
-              <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-medium">
-                <Lightbulb className="h-3 w-3" />
-                <span>Intuition & Tradeoffs</span>
-              </div>
-              <p className="text-[11px] text-zinc-200 leading-relaxed">
-                {stage1Intuition.verbalSummary}
-              </p>
-              {stage1Intuition.keyTradeoffs.length > 0 && (
-                <ul className="pt-1 space-y-0.5 text-[10px] text-zinc-400">
-                  {stage1Intuition.keyTradeoffs.map((item, idx) => (
-                    <li key={idx} className="flex items-start gap-1">
-                      <span className="text-emerald-500">›</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          {stage2Code && (
-            <div
-              data-testid="notch-stage2-card"
-              className="rounded-xl border border-sky-500/20 bg-sky-950/15 p-2.5 space-y-1"
-            >
-              <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-1.5 text-sky-400 font-medium">
-                  <Code2 className="h-3 w-3" />
-                  <span>Code Solution</span>
-                </div>
-                <span className="text-[9px] font-mono text-sky-300 px-1.5 py-0.2 rounded bg-sky-950/60 border border-sky-800/40">
-                  {stage2Code.language}
-                </span>
-              </div>
-              <pre className="p-2 rounded bg-zinc-950/90 font-mono text-[10px] text-zinc-300 overflow-x-auto border border-zinc-800/50">
-                {stage2Code.code}
-              </pre>
-            </div>
-          )}
-
-          {stage3Analysis && (
-            <div
-              data-testid="notch-stage3-card"
-              className="rounded-xl border border-purple-500/20 bg-purple-950/15 p-2.5 space-y-1"
-            >
-              <div className="flex items-center gap-1.5 text-purple-400 text-[11px] font-medium">
-                <Cpu className="h-3 w-3" />
-                <span>Complexity & Edge Cases</span>
-              </div>
-              <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-300 pt-0.5">
-                <span>Time: {stage3Analysis.timeComplexity}</span>
-                <span>Space: {stage3Analysis.spaceComplexity}</span>
-              </div>
-              {stage3Analysis.edgeCases.length > 0 && (
-                <ul className="pt-1 space-y-0.5 text-[10px] text-zinc-400">
-                  {stage3Analysis.edgeCases.map((ec, idx) => (
-                    <li key={idx} className="flex items-start gap-1">
-                      <span className="text-purple-400">›</span>
-                      <span>{ec}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          {/* Progressive Solution Stages (REQ-015, AC-006) */}
+          {(stage1Intuition || stage2Code || stage3Analysis) && (
+            <ProgressiveCard variant="compact" testIdPrefix="notch" />
           )}
 
           {/* Quick Toolbar */}

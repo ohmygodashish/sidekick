@@ -101,6 +101,43 @@ describe("useSessionStore", () => {
     expect(state.stage2Code?.language).toBe("python");
     expect(state.stage3Analysis?.timeComplexity).toBe("O(1)");
     expect(state.stage3Analysis?.edgeCases).toContain("Clock drift");
+    expect(state.progressiveSolution).not.toBeNull();
+    expect(state.progressiveSolution?.stage1Intuition?.verbalSummary).toBe(
+      "Use Redis sliding window counter"
+    );
+    expect(state.progressiveSolution?.stage2Code?.language).toBe("python");
+    expect(state.progressiveSolution?.stage3Analysis?.timeComplexity).toBe("O(1)");
+  });
+
+  it("should incrementally synchronize progressiveSolution on individual stage updates", () => {
+    useSessionStore.getState().setStage1Intuition({
+      verbalSummary: "Binary search on ranges",
+      keyTradeoffs: ["O(log N) runtime"],
+    });
+
+    let state = useSessionStore.getState();
+    expect(state.progressiveSolution?.stage1Intuition?.verbalSummary).toBe(
+      "Binary search on ranges"
+    );
+    expect(state.progressiveSolution?.stage2Code).toBeNull();
+
+    useSessionStore.getState().setStage2Code({
+      language: "typescript",
+      code: "function search() {}",
+      explanation: "Iterative binary search",
+    });
+
+    state = useSessionStore.getState();
+    expect(state.progressiveSolution?.stage2Code?.code).toBe("function search() {}");
+
+    useSessionStore.getState().setStage3Analysis({
+      timeComplexity: "O(log N)",
+      spaceComplexity: "O(1)",
+      edgeCases: ["Empty input"],
+    });
+
+    state = useSessionStore.getState();
+    expect(state.progressiveSolution?.stage3Analysis?.timeComplexity).toBe("O(log N)");
   });
 
   it("should clear session completely", () => {

@@ -45,7 +45,12 @@ export default function App() {
       )}
       style={isRunningInTauri ? undefined : { opacity }}
     >
-      {isNotch ? <NotchCompanion /> : <HUDContainer />}
+      <div
+        key={layoutMode}
+        className="w-full flex justify-center animate-in fade-in duration-200"
+      >
+        {isNotch ? <NotchCompanion /> : <HUDContainer />}
+      </div>
     </div>
   );
 }

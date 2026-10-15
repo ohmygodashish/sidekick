@@ -7,8 +7,6 @@ import {
   AlertTriangle,
   Radio,
   FileQuestion,
-  Lightbulb,
-  Code2,
   Cpu,
 } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
@@ -16,6 +14,7 @@ import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { OpacityControl } from "./OpacityControl";
 import { LayoutSwitcher } from "./LayoutSwitcher";
+import { ProgressiveCard } from "../cards/ProgressiveCard";
 import { cn } from "../../lib/utils";
 
 interface HUDContainerProps {
@@ -259,33 +258,9 @@ export const HUDContainer: React.FC<HUDContainerProps> = ({
               </section>
             )}
 
-            {/* Progressive Solution Stage Preview if present */}
+            {/* Progressive Disclosure Solution Engine (REQ-015, AC-006) */}
             {(stage1Intuition || stage2Code || stage3Analysis) && (
-              <div className="space-y-2 pt-1">
-                {stage1Intuition && (
-                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 p-3 text-xs space-y-1.5">
-                    <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                      <Lightbulb className="h-3.5 w-3.5" />
-                      <span>Stage 1: Intuition & Tradeoffs</span>
-                    </div>
-                    <p className="text-zinc-200 leading-relaxed">
-                      {stage1Intuition.verbalSummary}
-                    </p>
-                  </div>
-                )}
-
-                {stage2Code && (
-                  <div className="rounded-xl border border-sky-500/20 bg-sky-950/15 p-3 text-xs space-y-1.5">
-                    <div className="flex items-center gap-1.5 text-sky-400 font-medium">
-                      <Code2 className="h-3.5 w-3.5" />
-                      <span>Stage 2: Code ({stage2Code.language})</span>
-                    </div>
-                    <pre className="p-2 rounded bg-zinc-950/80 font-mono text-[11px] text-zinc-300 overflow-x-auto border border-zinc-800/40">
-                      {stage2Code.code}
-                    </pre>
-                  </div>
-                )}
-              </div>
+              <ProgressiveCard />
             )}
           </div>
         )}
