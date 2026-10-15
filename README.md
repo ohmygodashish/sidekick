@@ -19,11 +19,11 @@
 - [3. User Guide & Operating Manual](#3-user-guide--operating-manual)
   - [3.1 Quick Start & First Launch](#31-quick-start--first-launch)
   - [3.2 The Hotkey Control System](#32-the-hotkey-control-system)
-  - [3.3 Dual Display Modes (Floating HUD vs. Dynamic Notch)](#33-dual-display-modes-floating-hud-vs-dynamic-notch)
+  - [3.3 The Control Bar & Answer Panel](#33-the-control-bar--answer-panel)
   - [3.4 Real-Time Live Question Detection & Quick Pointers](#34-real-time-live-question-detection--quick-pointers)
   - [3.5 Multi-Provider Deep Intelligence & Progressive Disclosure](#35-multi-provider-deep-intelligence--progressive-disclosure)
   - [3.6 Silent Problem Capture (Vision)](#36-silent-problem-capture-vision)
-  - [3.7 Hardware Keychain Credential Security](#37-hardware-keychain-credential-security)
+  - [3.7 API Key & Settings Storage](#37-api-key--settings-storage)
   - [3.8 The Instant Panic Killswitch & Session Burner](#38-the-instant-panic-killswitch--session-burner)
   - [3.9 User Troubleshooting & FAQ](#39-user-troubleshooting--faq)
 - [4. Developer & Maintainer Guide](#4-developer--maintainer-guide)
@@ -34,7 +34,7 @@
     - [Driverless Audio Ingestion (`ScreenCaptureKit` + CoreAudio)](#driverless-audio-ingestion-screencapturekit--coreaudio)
     - [Embedded Offline Metal STT (`whisper.cpp`)](#embedded-offline-metal-stt-whispercpp)
     - [Silent Active-Window Vision Grabber (`CoreGraphics Quartz`)](#silent-active-window-vision-grabber-coregraphics-quartz)
-    - [Hardware Keychain & Ephemeral SQLite](#hardware-keychain--ephemeral-sqlite)
+    - [API Key Config File & Ephemeral SQLite](#api-key-config-file--ephemeral-sqlite)
   - [4.4 Data Contracts & Event Streams (IPC Reference)](#44-data-contracts--event-streams-ipc-reference)
   - [4.5 Local Development Setup](#45-local-development-setup)
   - [4.6 Test Automation & Invisibility Verification](#46-test-automation--invisibility-verification)
@@ -50,12 +50,12 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
 
 - **Invisible to Screen Sharing**: Never appears in Zoom, Google Meet, Microsoft Teams, Slack huddles, OBS Studio, Discord, or QuickTime Screen Recordings.
 - **Headless Phantom Operation**: No Dock tile, no Menu Bar icon, and excluded from `Cmd + Tab`. You summon it purely through muscle-memory hardware hotkeys.
-- **Natural Webcam Eye Contact**: Includes a **Dynamic Notch Companion** mode snapped directly below the MacBook camera lens so glancing at talking points aligns your gaze with the webcam.
+- **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu) with a single panel below it for answers or settings. Compact view hides the panel and leaves only the bar.
 - **Driverless Dual-Channel Audio**: Simultaneously captures remote meeting audio via Apple's macOS 13+ `ScreenCaptureKit` and your microphone via CoreAudio—no virtual audio cables (BlackHole, Soundflower, Loopback) required.
 - **On-Device Metal AI or Cloud Fallback**: Runs 100% offline Metal GPU-accelerated `whisper.cpp` transcription, with one-click toggles for Deepgram Nova-2 and Groq Whisper.
 - **Live Question Detection (< 1s)**: Automatically detects when an interviewer concludes a question, strips filler pleasantries, and displays 3–4 punchy talking points in under 800ms.
-- **Progressive Disclosure Problem Solving**: Staged problem solving powered by Claude 3.5/3.7 Sonnet, GPT-4o, Gemini 2.0 Flash/Pro, or OpenRouter across three collapsible tiers: **Verbal Intuition $\rightarrow$ Clean Production Code $\rightarrow$ Complexity Analysis & Edge Cases**.
-- **Hardware Security**: API keys live in your hardware-backed macOS Keychain (`com.sidekick.credentials`). Session data is held in an ephemeral SQLite database that is scrubbed on panic or single-click burn.
+- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Gemini, or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups.
+- **Local Key Storage**: API keys and settings live in a local config file (`~/.config/sidekick/config.json`, readable only by your macOS user). Session data is held in an ephemeral SQLite database that is scrubbed on panic or single-click burn.
 
 ```
                     ┌────────────────────────────────────────────────────────┐
@@ -70,8 +70,8 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
      │                        │    │                        │    │                         │
      │ • NSWindowSharingNone  │    │ • ScreenCaptureKit SCK │    │ • Groq LPU Detector     │
      │ • LSUIElement (No Dock)│    │ • CoreAudio Mic Input  │    │ • Multi-Provider Gateway│
-     │ • Floating Glass HUD   │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
-     │ • Dynamic Notch Pill   │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
+     │ • Control Bar & Panel  │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
+     │ • Compact View         │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
      └────────────────────────┘    └────────────────────────┘    └─────────────────────────┘
 ```
 
@@ -79,18 +79,18 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
 
 ## 2. The 8 Core Architectural Mandates
 
-Sidekick strictly enforces eight architectural mandates defined in [`spec/spec-architecture-sidekick-copilot.md`](./spec/spec-architecture-sidekick-copilot.md):
+Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-architecture-sidekick-copilot.md`](./docs/spec-architecture-sidekick-copilot.md):
 
 | # | Mandate | Implementation Guarantee |
 |:---:|:---|:---|
 | **1** | **Screen-Share Invisibility** | All overlay windows assign `NSWindow.sharingType = .none` (`NSWindowSharingNone`). Screen capture frameworks composite whatever is behind Sidekick with 0% pixel bleed. |
 | **2** | **Headless Phantom Operation** | Runs under `NSApplicationActivationPolicyAccessory` with `LSUIElement = true`. Zero Dock icon, zero Menu Bar tray, excluded from `Cmd + Tab`. Summoned exclusively via hotkeys. |
-| **3** | **Dual Display UX** | Switchable between a draggable Glassmorphism HUD (15%–100% opacity, click-through) and a top-docked Dynamic Notch companion bar (optimized for webcam eye contact). |
+| **3** | **Minimal Overlay UX** | One draggable control bar (Start/Stop meeting, Ask, Hide, menu) with a single answer or settings panel below it. Opacity 15%–100%, click-through, and a compact view that shows only the bar. |
 | **4** | **Driverless Dual-Audio** | Ingests pristine system audio via macOS 13+ `ScreenCaptureKit` and candidate voice via microphone into discrete Channel 0 (Interviewer) and Channel 1 (Candidate). Zero drivers needed. |
 | **5** | **Selectable STT** | Embedded Metal-accelerated `whisper.cpp` (`whisper-rs`) for 100% private offline transcription, with instant Cloud STT toggles (Deepgram Nova-2 / Groq Whisper). |
 | **6** | **Live Question Detection** | Real-time transcript evaluator extracts core questions and generates 3–4 instant talking points in < 1.0s (<100ms TTFT via Groq LPU / offline heuristic). |
 | **7** | **Multi-Provider Deep Engine** | Direct streaming integration for OpenRouter, Anthropic Direct, OpenAI Direct, and Google Gemini Direct with progressive disclosure rendering (Intuition $\rightarrow$ Code $\rightarrow$ Complexity). |
-| **8** | **Credential Security** | All API keys stored in macOS Keychain via native `Security.framework`. Ephemeral local SQLite database with instant < 25ms Panic killswitch and session burn. |
+| **8** | **Credential Security** | API keys and settings stored in a local JSON config file (`~/.config/sidekick/config.json`, mode `0600`). Ephemeral local SQLite database with instant < 25ms Panic killswitch and session burn. |
 
 ---
 
@@ -104,16 +104,19 @@ Sidekick strictly enforces eight architectural mandates defined in [`spec/spec-a
 2. **Launch Sidekick**:
    - Double-click `Sidekick.app`. 
    - **Notice**: No window opens immediately, and no icon bounces in the Dock or appears in the Menu Bar. This is intended phantom behavior.
-3. **Grant macOS Permissions**:
-   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> to summon the HUD.
-   - Sidekick requires two macOS permissions:
-     - **Microphone**: Needed to ingest your candidate voice channel for diarization and STT.
-     - **Screen Recording**: Required by macOS for `ScreenCaptureKit` audio capture and silent window vision capture.
-   - If prompted by macOS, allow both permissions in **System Settings $\rightarrow$ Privacy & Security**.
+3. **Summon Sidekick**:
+   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top of the screen.
 4. **Configure Your API Keys**:
-   - With the HUD open, press <kbd>Cmd</kbd> + <kbd>,</kbd> (or click the Settings gear icon).
-   - Enter your preferred LLM provider key (Groq for sub-second questions, Anthropic/OpenAI/Gemini/OpenRouter for deep solving).
-   - Click **Save API Keys**. Keys are securely locked into your macOS Keychain.
+   - Press <kbd>Cmd</kbd> + <kbd>,</kbd> (or open the **⋯** menu and choose **Settings**).
+   - In the **Keys** tab, enter your provider keys (Groq for fast question detection, Anthropic/OpenAI/Gemini/OpenRouter for full answers).
+   - Click **Save keys**. Keys are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
+5. **Start a Meeting**:
+   - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows a red stop square and the elapsed time.
+   - The first time, macOS asks for two permissions:
+     - **Microphone**: your side of the conversation.
+     - **Screen Recording**: required by macOS for `ScreenCaptureKit` audio capture and window capture.
+   - If capture can't start, a message under the bar says so. Allow both permissions in **System Settings $\rightarrow$ Privacy & Security**, then click **Start** again (Screen Recording may need an app restart).
+   - Click **Stop** when the meeting ends.
 
 ---
 
@@ -125,33 +128,33 @@ Sidekick is operated completely through global hardware keyboard shortcuts that 
 |:---|:---|:---|
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> | **Summon / Dismiss** | Toggle visibility of Sidekick overlay instantly. |
 | <kbd>Cmd</kbd> + <kbd>Esc</kbd> | **Instant Panic Killswitch** | **Instant panic (< 25ms)**: Synchronously hides all windows, halts audio capture, and aborts active network streams. |
-| <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> | **Toggle Click-Through** | Enables mouse click pass-through. Allows clicking into your IDE, terminal, or browser directly through the HUD. |
-| <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | **Toggle Layout Mode** | Switches between Floating Glassmorphism HUD and Dynamic Notch Companion layout. |
+| <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> | **Toggle Click-Through** | Enables mouse click pass-through. Allows clicking into your IDE, terminal, or browser directly through the overlay. |
+| <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | **Toggle Compact View** | Hides the answer panel and leaves only the control bar. Press again to bring the panel back. |
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> | **Silent Window Vision** | Silently captures the problem description/diagram from the frontmost coding window without crosshairs or sounds. |
-| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings Drawer** | Opens the API key vault, personalization profile editor, model selector, and audio engine drawer. |
-| <kbd>Enter</kbd> or <kbd>Cmd</kbd> + <kbd>Enter</kbd> | **Deep Solve** | Triggers deep reasoning on the active question or captured screenshot. |
-| <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd> | **Stage Accordion** | Expands/collapses Stage 1 (Intuition), Stage 2 (Code), and Stage 3 (Complexity) on progressive solution cards. |
+| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings** | Opens the settings panel (Keys, Profile, Audio, Danger) under the bar. |
+| <kbd>Enter</kbd> or <kbd>Cmd</kbd> + <kbd>Enter</kbd> | **Ask** | Answers the detected question. Ignored while you type in a field or use a button or menu. With no question, the **Ask** button in the bar opens a box to type one. |
 
 ---
 
-### 3.3 Dual Display Modes (Floating HUD vs. Dynamic Notch)
+### 3.3 The Control Bar & Answer Panel
 
-Sidekick offers two distinct display modes adapted to your interview style:
+Sidekick shows one control bar at the top of the screen and, when there is something to show, one panel under it.
 
-#### 1. Floating Glassmorphism HUD
-- **Best for**: Live coding exercises, multi-monitor setups, and LeetCode algorithmic interviews.
-- **Features**:
-  - Freely draggable anywhere on screen using the top header handle (`data-tauri-drag-region`).
-  - Smooth opacity slider (15% to 100%) so text remains legible over any background editor or dark mode IDE.
-  - Interactive pass-through button (`⌘⇧C`) allowing you to type code into VS Code while hints remain hovering directly above your editor.
+#### The control bar
 
-#### 2. Dynamic Notch Companion
-- **Best for**: System design rounds, behavioral questions, and hiring manager conversations.
-- **Features**:
-  - Compact 380px pill layout anchored directly beneath the MacBook hardware webcam notch.
-  - **Natural Eye Contact Guarantee**: Looking at the extracted question and talking points aligns your line of sight directly with your laptop's camera, projecting genuine, confident eye contact to the interviewer.
-  - Live animated 5-bar audio waveform pulsing with speaker turn indicators (green for interviewer, blue for candidate).
-  - Smooth downward expansion drawer when a question is detected or upon hover, with manual collapse overrides.
+| Button | What it does |
+|:---|:---|
+| **Start / Stop** | Starts or stops listening to the meeting. While live it shows a red stop square and the elapsed time. Nothing is captured until you press **Start**. |
+| **Ask** (<kbd>Cmd</kbd> + <kbd>Enter</kbd>) | Answers the detected question. With no question, it opens a box where you can type one. |
+| **Hide** (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>) | Hides the overlay. Press the shortcut again to bring it back. |
+| **⋯ menu** | Opacity (15%–100%), Compact view (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd>), Click-through (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd>), Settings (<kbd>Cmd</kbd> + <kbd>,</kbd>), and Panic (<kbd>Cmd</kbd> + <kbd>Esc</kbd>). |
+
+Drag the bar by its empty space to move the window.
+
+#### The panel
+- **Answer**: the question on one line, a short answer with key points, and expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. **✕** dismisses the answer and cancels it if it is still streaming.
+- **Settings**: opens in the same place. <kbd>Esc</kbd> or **✕** closes it.
+- **Compact view** hides the panel and leaves only the bar.
 
 ---
 
@@ -160,15 +163,15 @@ Sidekick offers two distinct display modes adapted to your interview style:
 During an interview, you don't always need full code—often, you need immediate verbal talking points within 1–2 seconds to begin answering smoothly.
 
 1. **How it works**:
-   - Channel 0 listens to incoming meeting audio via `ScreenCaptureKit`.
+   - While a meeting is live, Channel 0 listens to incoming meeting audio via `ScreenCaptureKit`. Only this interviewer channel is checked for questions; your own speech never replaces the question.
    - Energy-based Voice Activity Detection (VAD) monitors speech turns. When the interviewer concludes an inquiry (1.1s silence detected), the turn buffer is dispatched.
    - The evaluator model (Groq LPU `llama-3.3-70b-versatile` or offline heuristic) strips conversational noise ("Um", "Yeah so basically", "Can you explain how...").
 2. **What appears**:
-   - The distilled, core technical question pops up on the overlay.
-   - **3–4 high-impact talking points / architectural keywords** appear in < 800ms.
+   - The distilled, core technical question appears at the top of the answer panel.
+   - **3–4 high-impact talking points / architectural keywords** appear below it. Press <kbd>Cmd</kbd> + <kbd>Enter</kbd> for a full answer.
    - Example:
      > **Interviewer**: *"Um, so I noticed your background with microservices. How would you handle distributed transactions across orders and payments?"*  
-     > **Sidekick Question Banner**:  
+     > **Answer panel**:  
      > 🎯 *How to handle distributed transactions across orders and payments?*  
      > • **Two-Phase Commit (2PC)**: Strong consistency, blocking coordinator, single point of failure.  
      > • **Saga Pattern**: Choreography (event-driven) vs. Orchestration (central state machine).  
@@ -179,45 +182,43 @@ During an interview, you don't always need full code—often, you need immediate
 
 ### 3.5 Multi-Provider Deep Intelligence & Progressive Disclosure
 
-When you need an in-depth algorithmic solution or detailed system architecture, press **`Enter`** on the question banner or click **"Deep Solve"**.
+For a full answer, press <kbd>Cmd</kbd> + <kbd>Enter</kbd> (or <kbd>Enter</kbd>) or click **Ask** in the bar. You can also type a question or follow-up in the box at the bottom of the panel.
 
-Sidekick streams the answer in **three progressive stages**:
+The answer streams into one panel:
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 1: Verbal Intuition & Approach                     [Key: 1] ▾   │
-├────────────────────────────────────────────────────────────────────────┤
-│ • Redis Sliding Window Counter balances memory vs. boundary spikes.     │
-│ • Lua script ensures atomicity without distributed locks.              │
-└────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 2: Production-Grade Working Code                   [Key: 2] ▾   │
-├────────────────────────────────────────────────────────────────────────┤
-│  1  import time                                       [Python] [Copy]  │
-│  2  class SlidingWindowRateLimiter:                                    │
-│  3      def __init__(self, redis_client, limit: int, window_sec: int): │
-│  4          self.r = redis_client                                      │
-└────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 3: Complexity Analysis & Edge Cases                [Key: 3] ▾   │
-├────────────────────────────────────────────────────────────────────────┤
-│ Time: [O(1)]   Space: [O(N) active tenants]                           │
-│ • Clock drift between server nodes                                     │
-│ • Fallback to in-memory token bucket during Redis cluster partitions    │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ How would you design a rate limiter for a multi-tenant API?  ✕   │
+│                                                                  │
+│ Use a sliding-window counter in Redis, updated atomically by a   │
+│ Lua script, with a local token bucket as a fallback.             │
+│ • Sliding window balances memory against boundary spikes         │
+│ • Lua keeps the update atomic without distributed locks          │
+│                                                                  │
+│ [</> Code · python                                          ▴]   │
+│     class SlidingWindowRateLimiter: …                  [Copy]    │
+│ [⏱ Complexity · O(1) time · O(N) space                       ▾]  │
+│                                                                  │
+│ [ Ask a follow-up…                                          ↵ ]  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-- Press <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd> to expand or collapse each section independently.
-- Press <kbd>Cmd</kbd> + <kbd>C</kbd> while viewing Stage 2 to copy clean, unadorned code directly to your clipboard.
+- **Code** is expanded by default; click its row to collapse it. **Copy** puts the code on your clipboard.
+- **Complexity** is collapsed by default; expand it to see edge cases.
 
 #### Personalization Profiles
-In the Settings Drawer (`Cmd + ,`), configure:
-- **Resume Context**: Paste your resume text or drop your resume file. Sidekick tailors suggestions to technologies and experiences you actually possess.
+In Settings $\rightarrow$ **Profile** (`Cmd + ,`), configure:
+- **Resume Context**: Paste your resume text, or drop a `.txt` or `.md` file (up to 200 KB). PDFs are not read; paste their text instead. Sidekick tailors suggestions to technologies and experiences you actually possess.
 - **Job Description & Company**: Enter target company culture notes and tech stack requirements.
-- **Tone Presets**:
-  - `Staff Engineer`: Pragmatic, production-ready, trade-off oriented.
-  - `Concise 3 Bullets`: Punchy, ultra-high signal-to-noise ratio.
-  - `System Architect`: Focuses on scalability, reliability, failure domains, and distributed systems fundamentals.
+- **Seniority**: Junior, Mid, Senior, Staff, or Principal.
+- **Tone**:
+  - `Concise`: Short and direct.
+  - `Balanced` (default): Clear, structured answers.
+  - `Deep`: Thorough reasoning and edge cases.
+  - `Staff`: Trade-offs and operational realities.
+  - `Architect`: Systems, APIs, and scale.
+
+Changes save automatically.
 
 ---
 
@@ -232,21 +233,62 @@ When solving a LeetCode problem, HackerRank test, or reviewing a architecture di
    - **No camera shutter sound** plays.
    - **No mouse interaction** required.
    - Zero pixel bleed from background windows.
-4. The high-resolution PNG is sent to your configured vision model (Claude 3.5/3.7 Sonnet, GPT-4o, Gemini 2.0 Pro) and solved progressively into Stage 1, 2, and 3.
+4. Known gap: the shortcut's capture is not used yet. Every **Ask** takes its own screenshot of the frontmost window and sends it with the question to your configured model.
 
 ---
 
-### 3.7 Hardware Keychain Credential Security
+### 3.7 API Key & Settings Storage
 
-Sidekick stores all API keys in the **macOS Keychain** using Apple's native `Security.framework` (`SecItemAdd`, `SecItemCopyMatching`, `SecItemUpdate`, `SecItemDelete`) under the canonical service identifier:
+Sidekick keeps your API keys and app settings in one plain JSON file in your home folder:
 
 ```text
-com.sidekick.credentials
+~/.config/sidekick/config.json
 ```
 
-- Keys are **never** written to plaintext JSON files, `.env` files, or browser `localStorage`.
-- All keys are loaded into volatile memory on launch and wiped upon process exit.
-- Supported Providers: **OpenRouter**, **Anthropic Direct**, **OpenAI Direct**, **Google Gemini Direct**, **Groq Cloud**, and **Deepgram**.
+If `XDG_CONFIG_HOME` is set to an absolute path, the file is at `$XDG_CONFIG_HOME/sidekick/config.json` instead.
+
+The file looks like this:
+
+```json
+{
+  "apiKeys": { "openrouter": "sk-or-…", "groq": "gsk_…" },
+  "settings": { "state": { "selectedProvider": "openrouter", "…": "…" }, "version": 0 }
+}
+```
+
+- **Permissions**: The folder is created with mode `0700` and the file with mode `0600`. Sidekick sets these again on every write.
+- **Writes**: Each save writes a temp file and renames it over the old one. Writes are serialized with a lock.
+- **Corrupt file**: If the file cannot be parsed, it is renamed to `config.json.corrupt-<unix seconds>` and Sidekick starts a fresh file. Unknown top-level keys are kept.
+- **Settings**: Provider, models, speech-to-text engine, persona and tone, target company, job description, resume text, and layout preferences are stored in this file, not in browser storage. Settings saved by an older build are moved here automatically on first launch.
+- **Supported Providers**: **OpenRouter**, **Anthropic Direct**, **OpenAI Direct**, **Google Gemini Direct**, **Groq Cloud**, and **Deepgram**.
+- **Burn Session** does not touch this file. **Reset Settings** restores the default settings but keeps your API keys.
+
+#### Editing, Backing Up, and Moving Keys
+- **Edit by hand**: Quit Sidekick first. Otherwise the app can overwrite your change on its next save.
+- **Back up**: Copy the file to a safe place. Keep the copy private.
+- **Move to another Mac**: Copy the file, then run `chmod 600` on the copy.
+
+#### Security Model
+The file works like `~/.aws/credentials` or `~/.npmrc`:
+- Keys are **plain text** on disk.
+- Any process running as your macOS user can read the file.
+- The file is included in Time Machine backups and in any dotfile sync of `~/.config`.
+- FileVault encrypts the file at rest when the Mac is off or locked.
+- Never commit or share `config.json`.
+
+#### Why Not the Keychain
+- No Keychain prompts after rebuilds, because ad-hoc signed builds change their signature.
+- Keys are easy to edit, back up, and move.
+- The storage code has no macOS-only dependency (the app itself is still macOS-only).
+- `cargo test` no longer touches real credentials.
+
+#### Upgrading from the Keychain Build
+- Keys saved in the old Keychain were **not** migrated. Re-enter them once in **Settings → Keys**.
+- Optionally, delete the old entries. Repeat for each provider (`openrouter`, `anthropic`, `openai`, `gemini`, `groq`, `deepgram`):
+
+```bash
+security delete-generic-password -s com.sidekick.credentials -a openrouter
+```
 
 ---
 
@@ -261,16 +303,20 @@ If someone walks behind you, your interviewer asks you to share your entire desk
   2. `is_panicked` atomic flags trip to `true`.
   3. All in-flight LLM HTTP streaming connections abort immediately via `AbortController`.
   4. CoreAudio and ScreenCaptureKit audio ring buffers are flushed and zeroed in memory.
-  5. The HUD vanishes completely from your screen.
+  5. The overlay vanishes completely from your screen.
+  6. The meeting ends and audio capture stops. Click **Start** to listen again.
 - **To unhide**: Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> once safe.
 
 #### The "Burn Session" Button (Danger Zone)
-Inside Settings (`Cmd + ,` $\rightarrow$ Danger Zone):
-- Clicking the red **"Burn Session"** button executes an atomic eradication:
+Inside Settings (`Cmd + ,` $\rightarrow$ **Danger**):
+- Click the red **Burn** button, then click it again within 3 seconds to confirm. It:
   - Checkpoints and closes SQLite WAL files.
   - Drops all transcript turns, questions, and solution records.
   - Unlinks the physical `session.db` and temporary files from `~/Library/Application Support/Sidekick/`.
   - Clears all frontend Zustand state stores.
+  - Ends the meeting and stops audio capture. Click **Start** to listen again.
+  - Leaves your API keys and settings in `~/.config/sidekick/config.json` unchanged.
+- **Reset** (also two clicks) restores default settings and keeps your API keys.
 
 ---
 
@@ -286,7 +332,7 @@ Inside Settings (`Cmd + ,` $\rightarrow$ Danger Zone):
 > **A**: No. On macOS 13+, Sidekick uses Apple's native `ScreenCaptureKit` API to stream digital audio directly from running applications without kernel extensions or virtual audio devices.
 
 #### Q: Can I run Sidekick completely offline?
-> **A**: Yes. In Settings $\rightarrow$ Audio, select **Embedded Whisper (Offline Metal)**. Download the `tiny.en` or `base.en` model via the settings drawer. STT will execute locally on your Apple Silicon GPU with zero internet connection.
+> **A**: Speech-to-text can. In Settings $\rightarrow$ **Audio**, select **On this Mac** and click **Download model** (the tiny English model, about 75 MB). Transcription then runs locally on your Mac. Question detection falls back to an offline heuristic when no Groq key is set, but full answers always need a cloud model provider.
 
 ---
 
@@ -308,8 +354,8 @@ Sidekick is built on **Tauri v2** using a hybrid architecture:
 │   ┌───────────────┴────────────────┐   ┌───────────▼───────────────┐   │
 │   │          Hooks Layer           │   │         UI Layer          │   │
 │   │   • useQuestionDetector.ts     │   │   • HUDContainer.tsx      │   │
-│   │   • useDeepSolver.ts           │   │   • NotchCompanion.tsx    │   │
-│   │   • useAudioCapture.ts         │   │   • ProgressiveCard.tsx   │   │
+│   │   • useDeepSolver.ts           │   │   • ControlBar.tsx        │   │
+│   │                                │   │   • AnswerPanel.tsx       │   │
 │   └───────────────▲────────────────┘   │   • SettingsDrawer.tsx    │   │
 │                   │                    └───────────────────────────┘   │
 │   ┌───────────────┴────────────────┐                                   │
@@ -333,7 +379,7 @@ Sidekick is built on **Tauri v2** using a hybrid architecture:
 │   ┌──────▼──────┐ ┌───▼───────┐ ┌───▼───────┐ ┌───▼──────┐ ┌───▼─────┐ │
 │   │   appkit/   │ │  audio/   │ │  capture/ │ │ hotkeys/ │ │storage/ │ │
 │   │             │ │           │ │           │ │          │ │         │ │
-│   │ • window.rs │ │ • sck.rs  │ │ • window_ │ │ • mod.rs │ │•keychain│ │
+│   │ • window.rs │ │ • sck.rs  │ │ • window_ │ │ • mod.rs │ │•config  │ │
 │   │ • accessory │ │ • mic.rs  │ │   grab.rs │ │          │ │•db.rs   │ │
 │   │             │ │ • mixer.rs│ │           │ │          │ │         │ │
 │   │             │ │ • whisper │ │           │ │          │ │         │ │
@@ -350,23 +396,23 @@ sidekick/
 ├── scripts/
 │   ├── test-invisibility.sh        # Automated screen-share invisibility & zero-pixel-bleed test
 │   └── build-macos.sh              # Production build, codesign, and DMG packaging script
-├── spec/
+├── docs/
 │   ├── spec-architecture-sidekick-copilot.md  # Core architectural specification
-│   └── implementation-plan.md      # Phased task-by-task engineering plan
+│   ├── implementation-plan.md      # Phased task-by-task engineering plan
+│   └── audit.md                    # Code and design audit with current fix status
 ├── src/                            # React 19 Frontend Webview
-│   ├── __tests__/                  # Vitest unit and integration test suites (152 tests)
+│   ├── __tests__/                  # Vitest unit and integration test suites
 │   ├── components/
-│   │   ├── cards/                  # ProgressiveCard, CodeBlock, ComplexityBadge
-│   │   ├── hud/                    # HUDContainer, OpacityControl, LayoutSwitcher
-│   │   ├── notch/                  # NotchCompanion, NotchAudioPulse
-│   │   ├── question/               # QuestionBanner, QuickPointers
+│   │   ├── answer/                 # AnswerPanel (question, answer, follow-up box)
+│   │   ├── cards/                  # ProgressiveCard, CodeBlock
+│   │   ├── hud/                    # HUDContainer, ControlBar, BarMenu, OpacityControl
 │   │   └── settings/               # SettingsDrawer, ApiKeyInputs, ProfileEditor
 │   ├── hooks/                      # useDeepSolver, useQuestionDetector
 │   ├── lib/                        # Typed IPC bindings (ipc.ts) and classname utils (utils.ts)
 │   ├── services/ai/                # LLM clients (Anthropic, OpenAI, Gemini, OpenRouter, Groq)
 │   ├── store/                      # Zustand stores (appStore, sessionStore, settingsStore)
-│   ├── App.tsx                     # Top-level shell and layout router
-│   ├── index.css                   # Tailwind styles and glassmorphism directives
+│   ├── App.tsx                     # Top-level shell: hooks, event listeners, and the HUD
+│   ├── index.css                   # Tailwind setup and the shared sk-* UI tokens
 │   └── main.tsx                    # React DOM entry point
 └── src-tauri/                      # Rust 2021 Backend
     ├── capabilities/               # Tauri v2 permission definitions (default.json)
@@ -394,7 +440,7 @@ sidekick/
     │   │   └── mod.rs              # Panic, visibility, layout, and capture shortcuts
     │   ├── storage/                # Security and persistence
     │   │   ├── mod.rs
-    │   │   ├── keychain.rs         # macOS Security.framework generic password vault
+    │   │   ├── config.rs           # API keys and settings in ~/.config/sidekick/config.json
     │   │   └── db.rs               # Ephemeral SQLite database and burn_session() engine
     │   ├── lib.rs                  # Tauri commands, state initialization, and lifecycle setup
     │   └── main.rs                 # Native binary entry point
@@ -467,12 +513,14 @@ sidekick/
   - Grabs the frontmost candidate window using `CGWindowListCreateImage` with `kCGWindowImageBoundsIgnoreFraming`.
   - Encodes directly to PNG in volatile memory inside an explicit `autoreleasepool` and converts to base64. Operates in **< 60ms** without emitting system capture sounds or displaying crosshairs.
 
-#### Hardware Keychain & Ephemeral SQLite
-- **Location**: [`src-tauri/src/storage/keychain.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/storage/keychain.rs), [`src-tauri/src/storage/db.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/storage/db.rs)
+#### API Key Config File & Ephemeral SQLite
+- **Location**: [`src-tauri/src/storage/config.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/storage/config.rs), [`src-tauri/src/storage/db.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/storage/db.rs)
 - **Mechanism**:
-  - `keychain.rs` wraps native macOS `Security.framework`:
-    - `SecItemAdd` / `SecItemUpdate` / `SecItemCopyMatching` / `SecItemDelete`.
-    - Service: `com.sidekick.credentials`. Account: provider identifier (`"anthropic"`, `"openai"`, etc.).
+  - `config.rs` reads and writes one JSON file, `~/.config/sidekick/config.json` (or `$XDG_CONFIG_HOME/sidekick/config.json`):
+    - Top-level keys: `apiKeys` (provider to key) and `settings` (the persisted settings store).
+    - Directory `0700`, file `0600`, re-applied on every write. Writes are atomic (temp file + rename) and serialized by a lock.
+    - Corrupt files are renamed to `config.json.corrupt-<unix seconds>`. Unknown top-level keys are preserved.
+    - `cargo test` does not touch real credentials.
   - `db.rs` wraps embedded SQLite with WAL journaling:
     - Located at `~/Library/Application Support/Sidekick/session.db`.
     - Supports atomic session eradication:
@@ -495,16 +543,18 @@ sidekick/
 |:---|:---|
 | `set_click_through(enabled: bool) -> Result<(), String>` | Toggles mouse event pass-through on the native window. |
 | `set_window_opacity(alpha: f64) -> Result<(), String>` | Updates native `NSWindow.alphaValue` (clamped 0.15 to 1.0). |
-| `set_layout_mode(mode: String) -> Result<(), String>` | Notifies backend of layout switch (`"floating_hud"` vs `"dynamic_notch"`). |
+| `set_layout_mode(mode: String) -> Result<(), String>` | Saves the layout: `"floating_hud"` (bar and panel) or `"dynamic_notch"` (compact view, bar only). |
 | `trigger_panic() -> Result<(), String>` | Synchronously hides all windows, aborts network, and flushes audio buffers (< 25ms). |
 | `capture_active_window() -> Result<WindowCaptureResponse, String>` | Silently captures frontmost active window and returns Base64 PNG. |
-| `start_audio_capture(config: AudioCaptureConfig) -> Result<(), String>` | Starts dual-channel `ScreenCaptureKit` and microphone capture. |
-| `stop_audio_capture() -> Result<(), String>` | Stops audio capture streams and joins worker threads. |
+| `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Starts dual-channel `ScreenCaptureKit` and microphone capture. Called only when the user clicks **Start**. |
+| `stop_audio_capture() -> Result<(), String>` | Stops audio capture streams. Called when the user clicks **Stop**. |
 | `set_stt_engine(engine: String) -> Result<(), String>` | Switches STT engine (`"whisper_local"`, `"groq"`, `"deepgram"`). |
 | `download_stt_model(model_name: String) -> Result<(), String>` | Streams GGML weights from Hugging Face repository into local models dir. |
-| `store_api_key(provider: String, key: String) -> Result<(), String>` | Saves or updates API key in macOS Keychain (`com.sidekick.credentials`). |
-| `retrieve_api_key(provider: String) -> Result<String, String>` | Reads API key from macOS Keychain. |
-| `burn_session() -> Result<(), String>` | Atomically drops SQLite tables, unlinks database files, and resets stores. |
+| `store_api_key(provider: String, key: String) -> Result<(), String>` | Saves or updates an API key in `config.json`. An empty key deletes it. `provider` must be 1–32 characters of `a-z`, `0-9`, `_` or `-`. |
+| `retrieve_api_key(provider: String) -> Result<String, String>` | Reads an API key from `config.json`. Returns `""` when absent. |
+| `load_settings() -> Result<Option<String>, String>` | Returns the stored settings JSON string, or `null` when none is stored. |
+| `save_settings(settings: String) -> Result<(), String>` | Writes the settings JSON string to `config.json`. Passing `"null"` removes stored settings. |
+| `burn_session() -> Result<(), String>` | Purges audio buffers and stops capture, then drops SQLite tables and unlinks database files. |
 
 #### 2. Tauri Event Streams (Rust $\rightarrow$ Frontend)
 
@@ -513,7 +563,7 @@ sidekick/
 | `sidekick://panic` | `{"panicked": true, "timestamp": u64}` | Emitted when <kbd>Cmd</kbd> + <kbd>Esc</kbd> triggers instant panic. |
 | `sidekick://visibility_toggled` | `{"visible": bool}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> toggles visibility. |
 | `sidekick://click_through_toggled`| `{"click_through": bool}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> toggles pass-through. |
-| `sidekick://toggle_layout_mode` | `{"layout_mode": String}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> flips HUD / Notch. |
+| `sidekick://toggle_layout_mode` | `{"layout_mode": String}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> toggles compact view. |
 | `sidekick://active_window_captured`| `WindowCaptureResponse` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> captures a window. |
 | `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. |
 | `sidekick://session_burned` | `{"burned": true, "timestamp": u64}` | Emitted when session database and memory buffers are purged. |
@@ -567,10 +617,10 @@ Sidekick enforces strict test automation across both Rust and React layers.
 
 #### Running the Full Test Suite
 ```bash
-# Run all Rust backend unit and integration tests (71 tests):
+# Run all Rust backend unit and integration tests (safe: they only use temp directories):
 cargo test --manifest-path src-tauri/Cargo.toml
 
-# Run all React Vitest frontend unit tests (152 tests across 13 suites):
+# Run all React Vitest frontend unit tests:
 npm test -- --run
 
 # Run TypeScript typecheck and production Vite build:
@@ -638,7 +688,7 @@ All developers and contributors must adhere to these non-negotiable invariants:
 | **Question Extraction Latency** | `< 1.0 s` | Groq LPU sub-100ms TTFT + 1.1s VAD silence window. |
 | **Zero Raw Audio Files** | `0 bytes` | In-memory volatile PCM buffers only. No audio writes to disk. |
 | **Zero Telemetry** | `0 packets` | No analytics, crash reporters, or external tracking services. |
-| **Hardware Key Vault** | `Keychain` | All third-party secrets stored in `com.sidekick.credentials`. |
+| **Local Key Storage** | `config.json` (`0600`) | All third-party API keys stored in `~/.config/sidekick/config.json`. Plain text on disk, protected by file permissions and FileVault. |
 
 ---
 

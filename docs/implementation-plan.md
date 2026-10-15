@@ -2,9 +2,9 @@
 title: Sidekick Implementation Plan
 version: 1.0.0
 date_created: 2026-10-15
-last_updated: 2026-10-15
+last_updated: 2026-10-16
 owner: Sidekick Engineering Team
-spec: spec/spec-architecture-sidekick-copilot.md
+spec: docs/spec-architecture-sidekick-copilot.md
 tags: [plan, implementation, tauri, rust, react, stealth, macos]
 ---
 
@@ -21,7 +21,7 @@ All tasks MUST adhere to the binding architectural requirements established in [
 2. **Accessory App Policy**: The process MUST run under `NSApplicationActivationPolicyAccessory` (zero Dock icon, excluded from `Cmd + Tab`).
 3. **Z-Index & Fullscreen Persistence**: Overlay MUST be assigned `NSWindow.Level.floating` and `NSWindowCollectionBehaviorFullScreenAuxiliary`.
 4. **Instant Panic**: `Cmd + Esc` MUST synchronously hide all windows and abort network/audio pipelines within < 25ms.
-5. **Credential Security**: All API keys MUST be persisted to macOS Keychain via native `Security.framework` bindings, never in plaintext files.
+5. **Credential Security**: All API keys MUST be stored only in `~/.config/sidekick/config.json` (mode `0600`). This replaces the original Keychain rule, which was superseded on 2026-10-16 (see Task 13).
 6. **Ephemeral Privacy**: Zero external telemetry. Audio PCM buffers MUST be processed in memory and never stored as raw audio files.
 7. **Resource Budgets**: Idle RAM < 45MB; active meeting CPU < 6% on Apple Silicon.
 
@@ -140,6 +140,8 @@ flowchart TD
 
 ### Phase 2: Dual UI Engine (React 19 + Tailwind CSS)
 
+> **Superseded (2026-10-16):** The dual HUD / Dynamic Notch UI below was replaced by one Cluely-style layout: a draggable control bar (`ControlBar`, `BarMenu`) with Start/Stop meeting, Ask, Hide and a menu (opacity, compact view, click-through, settings, panic), and one panel slot that shows either the answer (`AnswerPanel` with `ProgressiveCard` and `CodeBlock`) or settings. `NotchCompanion`, `LayoutSwitcher`, `QuestionBanner` and `ComplexityBadge` were removed; the `dynamic_notch` layout value now means compact view (bar only). Audio capture starts only when the user presses Start (spec REQ-018). Shared styles live as `sk-*` tokens in `src/index.css` (spec GUD-001).
+
 #### Task 4: State Store & Glassmorphism Shell Architecture
 * **User Story**: As a user, I want a sleek, modern glassmorphism overlay with an opacity slider and draggable positioning.
 * **Spec Alignment**: Fulfills `REQ-006`.
@@ -220,7 +222,7 @@ flowchart TD
   * `src/components/settings/ApiKeyInputs.tsx`
   * `src/components/settings/ProfileEditor.tsx`
 * **Verification**:
-  * Fill in API keys and click "Save"; values persist to secure storage.
+  * Fill in API keys and click "Save"; values persist to `~/.config/sidekick/config.json`.
   * Click "Burn Session"; session state and memory buffers clear immediately.
 * **Commit Contract**: `feat(settings): implement multi-provider configuration and personalization profile drawer`
 
@@ -345,7 +347,9 @@ flowchart TD
 ### Phase 5: Security, Hardening & Distribution
 
 #### Task 13: macOS Keychain Storage & Local Ephemeral SQLite
-* **User Story**: As a user, I want my API keys securely locked in macOS Keychain and my interview session data erasable with a single click.
+> **Superseded (2026-10-16):** The Keychain vault below was replaced by a plain JSON config file. API keys and app settings now live in `~/.config/sidekick/config.json` (directory `0700`, file `0600`), written atomically by `src-tauri/src/storage/config.rs`. The Tauri commands are `store_api_key`, `retrieve_api_key`, `load_settings` and `save_settings`. `security-framework` and `keychain.rs` were removed. Keys saved in the old Keychain were not migrated. The SQLite session store described below is unchanged.
+
+* **User Story**: As a user, I want my API keys stored in a local config file and my interview session data erasable with a single click. (Original story: "securely locked in macOS Keychain".)
 * **Spec Alignment**: Fulfills `SEC-001`, `SEC-002`, `SEC-003`, `REQ-017`.
 * **Implementation Details**:
   * In Rust (`src-tauri/src/storage/keychain.rs`):
@@ -384,7 +388,7 @@ flowchart TD
 
 ## 3. Execution Readiness Checklist
 
-- [x] Technical Architecture Specification approved (`spec/spec-architecture-sidekick-copilot.md`)
+- [x] Technical Architecture Specification approved (`docs/spec-architecture-sidekick-copilot.md`)
 - [x] Implementation Plan with 14 atomic, verifiable tasks saved alongside spec
 - [x] All global constraints and security requirements embedded into task specifications
 - [x] Verification criteria and commit contracts defined for every task

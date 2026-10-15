@@ -2,7 +2,7 @@
 title: Sidekick Invisible Interview & Meeting Copilot Architecture Specification
 version: 1.0.0
 date_created: 2026-10-15
-last_updated: 2026-10-15
+last_updated: 2026-10-16
 owner: Sidekick Engineering Team
 tags: [architecture, design, app, stealth, audio, ai, macos]
 ---
@@ -25,7 +25,7 @@ This specification defines the architectural structure, component boundaries, da
   * Real-time conversational question detection and instant talking-point generation (<100ms TTFT).
   * Frontmost active-window vision capture without manual crosshair selection.
   * Progressive disclosure solution rendering across 3 structured tiers (Intuition $\rightarrow$ Code $\rightarrow$ Complexity).
-  * Multi-provider gateway for OpenRouter, Anthropic, OpenAI, and Google Gemini with secure macOS Keychain credential storage.
+  * Multi-provider gateway for OpenRouter, Anthropic, OpenAI, and Google Gemini with API keys stored in a local config file (`~/.config/sidekick/config.json`, mode `0600`).
 * **Out of Scope**: Windows or Linux native builds for v1.0 (macOS AppKit specialization is required for driverless `ScreenCaptureKit` and `NSWindowSharingNone`).
 
 ### 1.3 Intended Audience & Assumptions
@@ -55,33 +55,35 @@ This specification defines the architectural structure, component boundaries, da
 - **REQ-003 (Z-Index / Level)**: The overlay window MUST be assigned `NSWindow.Level.floating` and `NSWindowCollectionBehaviorFullScreenAuxiliary` to remain accessible above full-screen IDEs and video conference apps.
 - **REQ-004 (Panic Shutdown)**: Global hotkey `Cmd + Esc` MUST synchronously hide all windows, terminate audio capture pipelines, abort in-flight network streams, and purge prompt buffers in <25ms.
 - **REQ-005 (Click-Through Mode)**: Global hotkey `Cmd + Shift + C` MUST toggle `window.set_ignore_cursor_events(true/false)` to pass mouse events directly to background applications.
-- **REQ-006 (Dual UI Modes)**: The user interface MUST support two switchable display modes:
-  - *Floating HUD*: Freely draggable, resizable window with opacity slider (15%–100%).
-  * *Dynamic Notch Companion*: Snapped directly beneath the MacBook camera/notch in a compact pill layout to optimize natural webcam eye contact.
+- **REQ-006 (Minimal Overlay UI)**: The user interface MUST consist of one control bar at the top of the window and one panel slot below it:
+  - *Control bar*: Start/Stop meeting, Ask (`Cmd + Enter`), Hide (`Cmd + Shift + Space`), and a menu with opacity (15%–100%), compact view (`Cmd + Shift + M`), click-through (`Cmd + Shift + C`), settings (`Cmd + ,`) and panic (`Cmd + Esc`). The bar MUST be draggable (requires the `core:window:allow-start-dragging` capability).
+  - *Panel*: shows either the answer (REQ-015) or settings, never both. Compact view (layout value `dynamic_notch`) hides the panel and leaves only the bar.
 - **REQ-007 (Driverless Audio Ingestion)**: Meeting audio MUST be captured via `ScreenCaptureKit` system audio stream without requiring third-party kernel extensions or virtual audio cables. Candidate audio MUST be ingested via default microphone.
 - **REQ-008 (Speaker Diarization)**: Ingested audio MUST be split into two discrete logical channels: Channel 0 (Interviewer / System) and Channel 1 (Candidate / Mic).
 - **REQ-009 (Embedded Offline STT)**: The application MUST embed `whisper.cpp` compiled with Apple Metal support to perform 100% on-device speech transcription without external network requests.
 - **REQ-010 (Cloud STT Option)**: The application MUST support toggling to Cloud STT (Deepgram Nova-2 / Groq Whisper) via user settings.
-- **REQ-011 (Live Question Extraction)**: Audio chunks from Channel 0 MUST be continuously analyzed by a fast evaluator model. When interrogative intent is detected:
+- **REQ-011 (Live Question Extraction)**: While a meeting is live (REQ-018), audio chunks from Channel 0 MUST be continuously analyzed by a fast evaluator model. Channel 1 (the candidate's own speech) MUST NOT replace the active question. When interrogative intent is detected:
   - Conversational filler and pleasantries MUST be stripped.
-  - The distilled question MUST be rendered on the HUD.
+  - The distilled question MUST be rendered at the top of the answer panel.
   - 3–4 high-impact talking points MUST stream within <1.0s.
-- **REQ-012 (On-Demand Deep Trigger)**: The extracted question banner MUST render a dedicated trigger action (`Enter` or `Cmd + Enter`) allowing the user to selectively dispatch the query to the Deep Intelligence Engine.
+- **REQ-012 (On-Demand Deep Trigger)**: The user MUST be able to dispatch the active question to the Deep Intelligence Engine with `Enter` / `Cmd + Enter` or the Ask button. The shortcut MUST be ignored on key repeat and when focus is in a field, button, select, link, dialog or menu. With no active question, Ask MUST open a box where the user can type one; the same box MUST accept follow-up questions.
 - **REQ-013 (Silent Active Window Capture)**: Global hotkey `Cmd + Shift + S` MUST identify the frontmost active window and capture its visual bounds without displaying crosshairs, drag frames, or emitting system capture sounds.
 - **REQ-014 (Multi-Provider Deep Gateway)**: The Deep Intelligence Engine MUST support direct API integration for:
   - OpenRouter (Claude 3.5/3.7 Sonnet, DeepSeek R1/V3, Llama 3.3)
   - Anthropic Direct (Claude 3.5/3.7 Sonnet, Claude 3.5 Haiku)
   - OpenAI Direct (GPT-4o, GPT-4o-mini, o3-mini)
   - Google Gemini Direct (Gemini 2.0 Flash, Gemini 1.5 Pro)
-- **REQ-015 (Progressive Disclosure Rendering)**: Output from the Deep Engine MUST render in three distinct, collapsible sections:
-  1. *Stage 1*: Verbal Intuition & High-Level Approach.
-  2. *Stage 2*: Production-Grade Syntax-Highlighted Code.
-  3. *Stage 3*: Big-O Complexity & Critical Edge Cases.
-- **REQ-016 (Personalization Profiles)**: The engine MUST incorporate user-provided resumes (parsed text/PDF), job descriptions, and seniority tone instructions into the LLM system prompt.
-- **REQ-017 (Session Wipe / Burn)**: The UI MUST provide a single-click "Burn Session" command that immediately purges local SQLite cache, memory buffers, and temporary files.
+- **REQ-015 (Progressive Disclosure Rendering)**: Output from the Deep Engine MUST render in one answer panel, in this order:
+  1. *Stage 1*: a short answer with up to three key points, always visible.
+  2. *Stage 2*: a Code row (syntax-highlighted, copyable), expanded by default.
+  3. *Stage 3*: a Complexity row (Big-O and edge cases), collapsed by default.
+  The previous answer MUST be cleared when a new solve starts, a working state MUST be shown while solving, errors MUST be shown with a Retry action, and closing the panel MUST cancel an in-flight solve.
+- **REQ-016 (Personalization Profiles)**: The engine MUST incorporate user-provided resume text (pasted, or a `.txt`/`.md` file up to 200 KB; other formats, including PDF, are rejected with a message), job descriptions, seniority and tone (concise, balanced, deep, staff, system_architect) into the LLM system prompt.
+- **REQ-017 (Session Wipe / Burn)**: The UI MUST provide a "Burn Session" command, confirmed by a second click within 3 seconds, that immediately purges local SQLite cache, memory buffers and temporary files, and ends the meeting. It MUST NOT touch the config file (SEC-001). "Reset Settings" MUST use the same two-click confirm and MUST keep API keys.
+- **REQ-018 (User-Controlled Meeting Capture)**: Audio capture MUST NOT start at launch or on summon. It MUST start only when the user presses Start and stop when the user presses Stop; Panic (REQ-004) and Burn (REQ-017) MUST also end the meeting. While live, the control bar MUST show a recording indicator and the elapsed time. If starting or stopping fails, the error MUST be shown under the bar.
 
 ### 3.2 Security Requirements
-- **SEC-001 (Credential Isolation)**: All third-party API keys (OpenRouter, Anthropic, OpenAI, Google, Groq, Deepgram) MUST be stored exclusively in macOS Keychain via the native `Security.framework`.
+- **SEC-001 (Credential Isolation)**: All third-party API keys (OpenRouter, Anthropic, OpenAI, Google, Groq, Deepgram) MUST be stored only in the local config file `~/.config/sidekick/config.json` (or `$XDG_CONFIG_HOME/sidekick/config.json` when `XDG_CONFIG_HOME` is an absolute path). The directory MUST be created with mode `0700` and the file MUST be written with mode `0600`, re-applied on every write. Keys MUST NOT be stored in browser `localStorage`, `.env` files, or the macOS Keychain. Keys are plain text on disk: any process running as the same macOS user can read them, and they are included in backups. The file MUST NOT be committed or shared.
 - **SEC-002 (Zero Telemetry)**: The application MUST NOT send telemetry, analytics, crash logs, or heartbeat packets to any first-party or third-party tracking services.
 - **SEC-003 (Local Ephemeral Processing)**: Audio PCM buffers MUST be processed in memory and discarded immediately following STT transcription. No raw audio files may be written to persistent storage.
 
@@ -91,7 +93,7 @@ This specification defines the architectural structure, component boundaries, da
 - **CON-003 (CPU Budget)**: Active CPU utilization during an ongoing meeting MUST remain below 6% on Apple Silicon M-series processors.
 
 ### 3.4 Guidelines & Patterns
-- **GUD-001 (Eye Contact Optimization)**: Text sizing and layout in Dynamic Notch mode MUST be centered within a 400px horizontal focal span directly under the webcam lens.
+- **GUD-001 (Shared UI Tokens)**: Components MUST use the `sk-*` classes in `src/index.css`: one surface style, concentric corner radii, an 11–14px type scale, sky for actions and focus, red for recording and danger, emerald for success, 14px icons, and no looping animations except a spinner while work is in progress.
 - **PAT-001 (Event-Driven IPC)**: High-frequency data (audio streams, STT chunks, LLM tokens) MUST be dispatched over Tauri event streams (`app.emit`) rather than polled commands.
 
 ## 4. Interfaces & Data Contracts
@@ -117,17 +119,23 @@ fn trigger_panic() -> Result<(), String>;
 fn capture_active_window() -> Result<WindowCaptureResponse, String>;
 
 #[tauri::command]
-fn start_audio_capture(config: AudioCaptureConfig) -> Result<(), String>;
+fn start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>; // only on user Start (REQ-018)
 
 #[tauri::command]
 fn stop_audio_capture() -> Result<(), String>;
 
-// Keychain Credential Store
+// Config Store (API keys & settings, see SEC-001 and INF-001)
 #[tauri::command]
-fn store_api_key(provider: String, key: String) -> Result<(), String>;
+fn store_api_key(provider: String, key: String) -> Result<(), String>; // empty key deletes; provider is 1-32 chars of a-z, 0-9, _ or -
 
 #[tauri::command]
-fn retrieve_api_key(provider: String) -> Result<String, String>;
+fn retrieve_api_key(provider: String) -> Result<String, String>; // "" when absent
+
+#[tauri::command]
+fn load_settings() -> Result<Option<String>, String>; // stored settings JSON, or null
+
+#[tauri::command]
+fn save_settings(settings: String) -> Result<(), String>; // "null" removes stored settings
 ```
 
 ### 4.2 Data Schemas
@@ -202,17 +210,22 @@ fn retrieve_api_key(provider: String) -> Result<String, String>;
 - **AC-004 (Real-Time Question Detection Latency)**:
   - **Given** the interviewer concludes an interrogative statement,
   - **When** silence exceeding 1.1s is detected by VAD,
-  - **Then** the extracted question and 3–4 punchy talking points MUST appear on the HUD within 1.0s.
+  - **Then** the extracted question and 3–4 punchy talking points MUST appear in the answer panel within 1.0s.
 
 - **AC-005 (Embedded STT Offline Execution)**:
   - **Given** the host computer is placed in Airplane Mode (no internet connection),
   - **When** speech is received on the microphone with Embedded Whisper selected,
-  - **Then** accurate text transcription MUST continue streaming to the HUD without network errors.
+  - **Then** accurate text transcription MUST continue streaming to the overlay without network errors.
 
 - **AC-006 (Progressive Disclosure Navigation)**:
   - **Given** the Deep Engine generates a solution,
   - **When** the response streams to the frontend,
-  - **Then** Stage 1 (Verbal Intuition) MUST render first, followed by Stage 2 (Clean Code) and Stage 3 (Complexity Analysis) in expandable/collapsible cards.
+  - **Then** Stage 1 (the short answer) MUST render first, followed by the Code row (expanded) and the Complexity row (collapsed), in one panel.
+
+- **AC-007 (User-Controlled Meeting Capture)**:
+  - **Given** Sidekick has launched and been summoned,
+  - **When** the user has not pressed Start,
+  - **Then** no audio MUST be captured; after Start the bar MUST show a recording indicator and timer, and after Stop, Panic or Burn capture MUST end.
 
 ## 6. Test Automation Strategy
 
@@ -255,7 +268,7 @@ Electron bundles a complete Chromium browser and Node.js runtime, producing ~180
 - **PLT-004 (Apple Metal Toolchain)**: Required for GPU-accelerated local `whisper.cpp` inference.
 
 ### 8.3 Infrastructure & Local Storage Dependencies
-- **INF-001 (macOS Keychain)**: Hardware-backed secure storage for API keys.
+- **INF-001 (Local Config File)**: Plain JSON file at `~/.config/sidekick/config.json` (or `$XDG_CONFIG_HOME/sidekick/config.json`) holding API keys and app settings. Writes are atomic (temp file + rename) and serialized by a lock. A corrupt file is renamed to `config.json.corrupt-<unix seconds>` and a fresh file is started. Unknown top-level keys are preserved. Settings saved by an older build in `localStorage` are moved into this file on first launch and then removed from `localStorage`. Burn Session does not touch this file; Reset Settings restores defaults and keeps API keys.
 - **INF-002 (Local SQLite)**: Ephemeral storage for interview session logs with immediate purge capability.
 
 ## 9. Examples & Edge Cases
