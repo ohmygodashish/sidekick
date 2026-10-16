@@ -70,8 +70,8 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
      │                        │    │                        │    │                         │
      │ • NSWindowSharingNone  │    │ • ScreenCaptureKit SCK │    │ • Groq live options     │
      │ • LSUIElement (No Dock)│    │ • CoreAudio Mic Input  │    │ • Multi-Provider Gateway│
-     │ • Control Bar & Panel  │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
-     │ • Compact View         │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
+     │ • Bar, Options & Panel │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
+     │ • Click pass-through   │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
      └────────────────────────┘    └────────────────────────┘    └─────────────────────────┘
 ```
 
@@ -105,13 +105,13 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
    - Double-click `Sidekick.app`. 
    - **Notice**: No window opens immediately, and no icon bounces in the Dock or appears in the Menu Bar. This is intended phantom behavior.
 3. **Summon Sidekick**:
-   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top of the screen.
+   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top-centre of the screen, just under the menu bar.
 4. **Configure Your API Keys**:
    - Press <kbd>Cmd</kbd> + <kbd>,</kbd> (or open the **⋯** menu and choose **Settings**).
-   - In the **Keys** tab, enter your provider keys (Groq for fast question detection, Anthropic/OpenAI/Gemini/OpenRouter for full answers).
+   - In the **Keys** tab, enter your provider keys: Groq for live options and fast transcription, and one of OpenRouter/Anthropic/OpenAI/Gemini (or Groq) for full answers. The answer model is chosen per provider; switching provider switches to that provider's default model.
    - Click **Save keys**. Keys are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
 5. **Start a Meeting**:
-   - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows a red stop square and the elapsed time.
+   - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows two level dots (sky = system audio, orange = microphone) and the elapsed time, and the caption and live options appear under the bar.
    - The first time, macOS asks for two permissions:
      - **Microphone**: your side of the conversation.
      - **Screen Recording**: required by macOS for `ScreenCaptureKit` audio capture and window capture.
@@ -252,7 +252,7 @@ The file looks like this:
 ```json
 {
   "apiKeys": { "openrouter": "sk-or-…", "groq": "gsk_…" },
-  "settings": { "state": { "selectedProvider": "openrouter", "…": "…" }, "version": 0 }
+  "settings": { "state": { "selectedProvider": "openrouter", "theme": "system", "…": "…" }, "version": 1 }
 }
 ```
 
@@ -412,7 +412,7 @@ sidekick/
 │   ├── services/ai/                # LLM clients (Anthropic, OpenAI, Gemini, OpenRouter, Groq)
 │   ├── store/                      # Zustand stores (appStore, sessionStore, settingsStore)
 │   ├── App.tsx                     # Top-level shell: hooks, event listeners, and the HUD
-│   ├── index.css                   # Tailwind setup and the shared sk-* UI tokens
+│   ├── index.css                   # Theme tokens (dark and light), sk-* component classes, motion
 │   └── main.tsx                    # React DOM entry point
 └── src-tauri/                      # Rust 2021 Backend
     ├── capabilities/               # Tauri v2 permission definitions (default.json)
@@ -437,7 +437,8 @@ sidekick/
     │   │   ├── mod.rs
     │   │   └── window_grab.rs      # CGWindowListCopyWindowInfo and in-memory PNG encoder
     │   ├── hotkeys/                # Global hardware shortcuts dispatcher
-    │   │   └── mod.rs              # Panic, visibility, layout, and capture shortcuts
+    │   │   └── mod.rs              # Panic, visibility, layout, capture, and Cmd+Option+1/2/3 option shortcuts
+    │   ├── hit_region.rs           # Cursor poller: click pass-through everywhere except the UI
     │   ├── storage/                # Security and persistence
     │   │   ├── mod.rs
     │   │   ├── config.rs           # API keys and settings in ~/.config/sidekick/config.json
@@ -471,6 +472,10 @@ sidekick/
   - `NSWindowSharingNone` (0): Completely excludes the window from all OS display capture APIs (`CGDisplayStream`, `ScreenCaptureKit`, QuickTime, and Zoom capture hooks).
   - `NSFloatingWindowLevel` (3): Floats above normal IDE and browser windows.
   - `NSWindowCollectionBehaviorFullScreenAuxiliary`: Ensures the window remains visible even when your IDE or conference call is in macOS Native Fullscreen spaces.
+
+#### Click Pass-Through Around the UI (`hit_region.rs`)
+- **Location**: [`src-tauri/src/hit_region.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/hit_region.rs), [`src/hooks/useHitRegions.ts`](file:///Users/ashish/Developer/sidekick/src/hooks/useHitRegions.ts)
+- **Mechanism**: The overlay is one fixed transparent window (600 pt wide, the screen's work-area height, top-centre) that never resizes, because resizing a WKWebView repaints the page and makes the UI blink. The frontend reports the rects of every visible surface (`.sk-bar`, `.sk-panel`, `.sk-menu`, `.sk-surface`) with `set_hit_regions`, re-measuring on resize, mount and animation end. A Rust thread polls the cursor every 16 ms and calls `set_ignore_cursor_events` only when the answer changes, so the window takes the mouse only over the UI. Click-through mode (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd>) forces pass-through everywhere.
 
 #### Driverless Audio Ingestion (`ScreenCaptureKit` + CoreAudio)
 - **Location**: [`src-tauri/src/audio/sck_audio_bridge.m`](file:///Users/ashish/Developer/sidekick/src-tauri/src/audio/sck_audio_bridge.m), [`src-tauri/src/audio/mixer.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/audio/mixer.rs)
@@ -541,13 +546,14 @@ sidekick/
 
 | Command Signature | Description |
 |:---|:---|
-| `set_click_through(enabled: bool) -> Result<(), String>` | Toggles mouse event pass-through on the native window. |
+| `set_click_through(enabled: bool) -> Result<(), String>` | Turns click-through mode on or off; the hit-region poller applies it within 16 ms. |
+| `set_hit_regions(rects: Vec<[f64; 4]>)` | Reports the visible UI as `[x, y, width, height]` rects in window points. The window takes the mouse only over these. |
 | `set_window_opacity(alpha: f64) -> Result<(), String>` | Updates native `NSWindow.alphaValue` (clamped 0.15 to 1.0). |
 | `set_layout_mode(mode: String) -> Result<(), String>` | Saves the layout: `"floating_hud"` (bar and panel) or `"dynamic_notch"` (compact view, bar only). |
 | `trigger_panic() -> Result<(), String>` | Synchronously hides all windows, aborts network, and flushes audio buffers (< 25ms). |
 | `capture_active_window() -> Result<WindowCaptureResponse, String>` | Silently captures frontmost active window and returns Base64 PNG. |
-| `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Starts dual-channel `ScreenCaptureKit` and microphone capture. Called only when the user clicks **Start**. |
-| `stop_audio_capture() -> Result<(), String>` | Stops audio capture streams. Called when the user clicks **Stop**. |
+| `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Async; starts dual-channel `ScreenCaptureKit` and microphone capture off the main thread. Called only when the user clicks **Start**; a second call while capturing is a no-op. |
+| `stop_audio_capture() -> Result<(), String>` | Async; stops both streams off the main thread and emits a final zero `audio_level`. Called when the user clicks **Stop**. |
 | `set_stt_engine(engine: String) -> Result<(), String>` | Switches STT engine (`"whisper_local"`, `"groq"`, `"deepgram"`). |
 | `download_stt_model(model_name: String) -> Result<(), String>` | Streams GGML weights from Hugging Face repository into local models dir. |
 | `store_api_key(provider: String, key: String) -> Result<(), String>` | Saves or updates an API key in `config.json`. An empty key deletes it. `provider` must be 1–32 characters of `a-z`, `0-9`, `_` or `-`. |
@@ -565,7 +571,10 @@ sidekick/
 | `sidekick://click_through_toggled`| `{"click_through": bool}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> toggles pass-through. |
 | `sidekick://toggle_layout_mode` | `{"layout_mode": String}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> toggles compact view. |
 | `sidekick://active_window_captured`| `WindowCaptureResponse` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> captures a window. |
-| `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. |
+| `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. Never carries invented text. |
+| `sidekick://stt_error` | `{"message": String, "engine": "groq"\|"deepgram"\|"whisper_local", "recovered": bool, "timestamp": u64}` | Emitted when a turn couldn't be transcribed, or (`recovered: true`) when a cloud failure was covered by the local model. The same message is sent at most once per 10 s. Shown in the caption. |
+| `sidekick://audio_level` | `{"interviewer": f32, "candidate": f32}` | Live level per source, 0–1, at most every 100 ms while capturing. Drives the level dots. |
+| `sidekick://pick_option` | `{"index": 0\|1\|2}` | Emitted by <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>; the frontend answers that live option. |
 | `sidekick://session_burned` | `{"burned": true, "timestamp": u64}` | Emitted when session database and memory buffers are purged. |
 
 ---
@@ -607,7 +616,13 @@ npm run dev
 
 # 5. Run full Tauri desktop application in development mode
 npm run tauri -- dev
+
+# Debug builds only: skip screen-share hiding and show the window at launch,
+# so the UI can be screenshotted and tested
+SIDEKICK_DEV_VISIBLE=1 npm run tauri -- dev
 ```
+
+After changing `tailwind.config.js` (for example adding a theme token), restart the dev server; the running one keeps the old config.
 
 ---
 
@@ -617,7 +632,8 @@ Sidekick enforces strict test automation across both Rust and React layers.
 
 #### Running the Full Test Suite
 ```bash
-# Run all Rust backend unit and integration tests (safe: they only use temp directories):
+# Run all Rust backend unit and integration tests (safe: they only write to temp directories;
+# some read a local Whisper model if one is installed):
 cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run all React Vitest frontend unit tests:
@@ -685,7 +701,7 @@ All developers and contributors must adhere to these non-negotiable invariants:
 | **Idle Memory Footprint** | `< 45 MB` | Webview optimizations, lazy model loading, release profile LTO. |
 | **Active Meeting CPU Utilization** | `< 6%` | Apple Silicon hardware Metal acceleration, 2x2 SCK footprint. |
 | **Panic Reaction Speed** | `< 25 ms` | Synchronous AppKit `hide()`, non-blocking worker thread drops. |
-| **Question Extraction Latency** | `< 1.0 s` | Groq LPU sub-100ms TTFT + 1.1s VAD silence window. |
+| **Live Options Latency** | `≈ 1 s after a turn ends` | 1.1 s VAD silence ends the turn, then transcription, then one Groq call (≈ 0.4 s measured). One request in flight at a time. |
 | **Zero Raw Audio Files** | `0 bytes` | In-memory volatile PCM buffers only. No audio writes to disk. |
 | **Zero Telemetry** | `0 packets` | No analytics, crash reporters, or external tracking services. |
 | **Local Key Storage** | `config.json` (`0600`) | All third-party API keys stored in `~/.config/sidekick/config.json`. Plain text on disk, protected by file permissions and FileVault. |

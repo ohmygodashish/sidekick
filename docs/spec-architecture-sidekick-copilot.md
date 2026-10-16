@@ -22,10 +22,11 @@ This specification defines the architectural structure, component boundaries, da
   * Screen-share invisibility preventing capture by Zoom, Google Meet, Microsoft Teams, Slack, Discord, QuickTime, and OBS.
   * System audio capture of meeting participants without virtual audio drivers (BlackHole/Loopback).
   * On-device speech-to-text using Metal-accelerated `whisper.cpp` alongside optional cloud STT toggles.
-  * Real-time conversational question detection and instant talking-point generation (<100ms TTFT).
+  * Live numbered options during the conversation: the question just asked (pinned) and three likely next questions, updated after every turn and answered on demand with `Cmd + Option + 1/2/3`.
   * Frontmost active-window vision capture without manual crosshair selection.
   * Progressive disclosure solution rendering across 3 structured tiers (Intuition $\rightarrow$ Code $\rightarrow$ Complexity).
-  * Multi-provider gateway for OpenRouter, Anthropic, OpenAI, and Google Gemini with API keys stored in a local config file (`~/.config/sidekick/config.json`, mode `0600`).
+  * Multi-provider gateway for OpenRouter, Anthropic, OpenAI, Google Gemini and Groq with API keys stored in a local config file (`~/.config/sidekick/config.json`, mode `0600`).
+  * A click-through overlay (clicks pass through everywhere except the visible UI) with System, Light and Dark themes.
 * **Out of Scope**: Windows or Linux native builds for v1.0 (macOS AppKit specialization is required for driverless `ScreenCaptureKit` and `NSWindowSharingNone`).
 
 ### 1.3 Intended Audience & Assumptions
@@ -105,7 +106,10 @@ This specification defines the architectural structure, component boundaries, da
 ```rust
 // Window & Display Management
 #[tauri::command]
-fn set_click_through(enabled: bool) -> Result<(), String>;
+fn set_click_through(enabled: bool) -> Result<(), String>; // forces pass-through everywhere (REQ-005)
+
+#[tauri::command]
+fn set_hit_regions(rects: Vec<[f64; 4]>); // visible UI as [x, y, w, h] in window points; the window takes the mouse only over these
 
 #[tauri::command]
 fn set_window_opacity(alpha: f64) -> Result<(), String>;
@@ -121,10 +125,10 @@ fn trigger_panic() -> Result<(), String>;
 fn capture_active_window() -> Result<WindowCaptureResponse, String>;
 
 #[tauri::command]
-fn start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>; // only on user Start (REQ-018)
+async fn start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>; // only on user Start (REQ-018); off the main thread; idempotent
 
 #[tauri::command]
-fn stop_audio_capture() -> Result<(), String>;
+async fn stop_audio_capture() -> Result<(), String>; // off the main thread; emits a final zero audio_level
 
 // Config Store (API keys & settings, see SEC-001 and INF-001)
 #[tauri::command]
@@ -142,24 +146,25 @@ fn save_settings(settings: String) -> Result<(), String>; // "null" removes stor
 
 ### 4.2 Data Schemas
 
-#### Question Extractor Event Schema (`sidekick://question_detected`)
+#### Live Options (Groq response, REQ-011)
+The evaluator gets the last 12 turns as `Interviewer: …` / `Candidate: …` lines inside `<transcript>` delimiters and returns JSON mode output:
 ```json
 {
-  "event": "sidekick://question_detected",
-  "payload": {
-    "question_id": "q_104928",
-    "timestamp": 1729000000000,
-    "confidence": 0.98,
-    "raw_transcript": "Um, yeah, so I was wondering, how would you approach designing a rate limiter for a multi-tenant API?",
-    "extracted_question": "How would you design a rate limiter for a multi-tenant API?",
-    "quick_pointers": [
-      "Token Bucket or Leaky Bucket algorithm",
-      "Redis sliding window log using sorted sets (ZSET)",
-      "Key schema: tenant_id:user_id:endpoint",
-      "Ask interviewer: distributed vs single-node, hard vs soft throttling limits"
-    ]
-  }
+  "asked": "How would you determine if a set of build targets with dependencies contains a circular dependency?",
+  "likely": [
+    "What is the time complexity of your solution?",
+    "How would you handle a very large graph?",
+    "Can you explain the difference between BFS and DFS here?"
+  ]
 }
+```
+`asked` is `null` when the interviewer's latest turn asks nothing. The client keeps at most one asked and three distinct likely questions; a null `asked` keeps the previous one pinned.
+
+#### Listening Events (Rust → frontend, REQ-019)
+```json
+{ "event": "sidekick://audio_level", "payload": { "interviewer": 0.42, "candidate": 0.0 } }
+{ "event": "sidekick://stt_error", "payload": { "message": "Groq rejected the API key.", "engine": "groq", "recovered": false, "timestamp": 1729000000000 } }
+{ "event": "sidekick://pick_option", "payload": { "index": 0 } }
 ```
 
 #### Progressive Disclosure Solution Schema
@@ -167,7 +172,7 @@ fn save_settings(settings: String) -> Result<(), String>; // "null" removes stor
 {
   "question_id": "q_104928",
   "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20241022",
+  "model": "claude-haiku-5-5",
   "stage_1_intuition": {
     "verbal_summary": "We implement a Redis-backed Sliding Window Counter. A pure fixed window allows twice the limit at window boundaries, while a sliding window log consumes too much memory for high-volume APIs. The sliding window counter strikes the optimal balance between accuracy and memory.",
     "key_tradeoffs": [

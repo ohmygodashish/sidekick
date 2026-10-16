@@ -67,7 +67,7 @@ Audit IDs refer to [`audit.md`](audit.md).
 - **Fixed-width meeting button**, with icon cross-fades.
 - **Consistency sweep** of every component against the tokens.
 
-### 5. Verify and document
+### 5. Verify and document — done
 
 - Check in the real Tauri window:
   - sizing and click-through around the UI
@@ -81,3 +81,12 @@ Audit IDs refer to [`audit.md`](audit.md).
 ## Out of scope
 
 Screen-share hiding (`src-tauri/src/appkit/*`), SQLite cleanup, build/signing (S4/S5), CSP (S2), minimum macOS version (S9).
+
+## Results (16 Oct 2026)
+
+- **Verified by the user in the real window**: bar top-centre; clicks pass through around the UI; menu and Settings open cleanly; drag; click-through indicator; level dots; two-line captions; options fill, roll and pin the asked question; Cmd+Option+N answers; dark and light themes; steady bar width; pass-through and screen-share hiding on the normal (stealth) build.
+- **Not yet confirmed by eye**: the motion (menu, options and caption fades).
+- **Checks**: `tsc` clean, vitest 180/180, `cargo test --lib` 83/83, `npm run build` OK.
+- **Changes from the plan**: the window doesn't resize to fit (see Decisions); the caption became two lines (System / Microphone) and the mic dot orange, at the user's request.
+- **Still open**: see the "Status update 2" block in [`audit.md`](audit.md).
+
