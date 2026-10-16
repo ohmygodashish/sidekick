@@ -77,3 +77,31 @@ export async function downloadSttModel(modelName: string): Promise<string | null
   return await safeInvoke<string>("download_stt_model", { modelName });
 }
 
+/**
+ * An audio input device. isDefault marks the one the system uses.
+ */
+export interface InputDevice {
+  name: string;
+  isDefault: boolean;
+}
+
+/**
+ * Lists the microphones the system can record from.
+ */
+export async function listInputDevices(): Promise<InputDevice[] | null> {
+  return await safeInvoke<InputDevice[]>("list_input_devices");
+}
+
+/**
+ * Starts the microphone meter (no transcription). Rejects with a friendly message, e.g. when the mic is denied.
+ */
+export async function startMicTest(): Promise<void> {
+  await invokeInTauri("start_mic_test");
+}
+
+/**
+ * Stops the microphone meter.
+ */
+export async function stopMicTest(): Promise<void> {
+  await safeInvoke("stop_mic_test");
+}

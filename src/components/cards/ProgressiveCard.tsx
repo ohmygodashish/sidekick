@@ -65,7 +65,7 @@ export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution, clas
 
   const rawSummary = typeof stage1?.verbalSummary === "string" ? stage1.verbalSummary : "";
   const summary = PARTIAL_TAG.test(rawSummary) ? "" : rawSummary;
-  const tradeoffs = listOfStrings(stage1?.keyTradeoffs).slice(0, 3);
+  const tradeoffs = listOfStrings(stage1?.keyTradeoffs).slice(0, 4);
 
   const hasCode = Boolean(stage2?.code);
   const edgeCases = listOfStrings(stage3?.edgeCases);
@@ -112,7 +112,7 @@ export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution, clas
         <Section
           rowTestId="answer-complexity-row"
           icon={<Clock className="h-3.5 w-3.5 shrink-0 text-sk-fg-3" aria-hidden="true" />}
-          label="Complexity"
+          label="Analysis"
           detail={complexity || undefined}
           defaultOpen={false}
         >

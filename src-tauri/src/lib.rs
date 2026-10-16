@@ -170,6 +170,11 @@ pub fn run() {
             get_stt_engine,
             list_local_stt_models,
             download_stt_model,
+            list_input_devices,
+            set_mic_device,
+            set_stt_language,
+            start_mic_test,
+            stop_mic_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

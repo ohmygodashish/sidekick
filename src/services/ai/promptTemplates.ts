@@ -41,10 +41,21 @@ export function getTonePrompt(tone: TonePreset = "balanced"): string {
   }
 }
 
+export interface PromptOptions {
+  /** The active mode's instructions; empty or null for General */
+  modeInstructions?: string | null;
+  /** The language answers are written in; English or none adds nothing */
+  outputLanguage?: string;
+}
+
 /**
- * Builds the complete system prompt injecting candidate profile and formatting directives (REQ-014, REQ-015, REQ-016).
+ * The system prompt in two parts. `prefix` depends only on the profile, so it stays byte-stable across
+ * modes and languages (the provider cache keys on it); `suffix` holds the mode and language.
  */
-export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>): string {
+export function buildSystemPromptParts(
+  profile?: Partial<PersonalizationProfile>,
+  options: PromptOptions = {}
+): { prefix: string; suffix: string } {
   const seniorityText = getSeniorityPrompt(profile?.seniorityPreset);
   const toneText = getTonePrompt(profile?.tonePreset);
 
@@ -116,7 +127,21 @@ export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>): st
     "Do NOT output markdown code blocks wrapping the outer XML tags. Output the XML tags directly."
   );
 
-  return sections.join("\n");
+  const suffix: string[] = [];
+  const instructions = options.modeInstructions?.trim();
+  if (instructions) suffix.push("", "### MODE", instructions);
+  const language = options.outputLanguage?.trim();
+  if (language && language !== "English") {
+    suffix.push("", "### LANGUAGE", `Write every answer in ${language}. Keep the XML tag names, code and identifiers in English.`);
+  }
+
+  return { prefix: sections.join("\n"), suffix: suffix.join("\n") };
+}
+
+/** The complete system prompt: the profile and format rules, then the mode and language (REQ-014, REQ-015, REQ-016). */
+export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>, options?: PromptOptions): string {
+  const { prefix, suffix } = buildSystemPromptParts(profile, options);
+  return prefix + suffix;
 }
 
 const MAX_HISTORY_EXCHANGES = 6;

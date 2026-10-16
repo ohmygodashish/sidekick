@@ -3,6 +3,7 @@ import {
   AudioLines,
   Keyboard,
   KeyRound,
+  Layers,
   LoaderCircle,
   Monitor,
   Moon,
@@ -14,7 +15,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  OUTPUT_LANGUAGES,
+  STT_LANGUAGES,
   useSettingsStore,
+  type SttLanguage,
   type SttMode,
   type ThemePreference,
 } from "../../store/settingsStore";
@@ -27,10 +31,12 @@ import {
 } from "../../lib/ipc";
 import { ApiKeyInputs } from "./ApiKeyInputs";
 import { ProfileEditor } from "./ProfileEditor";
+import { ModesTab } from "./ModesTab";
+import { MicSection } from "./MicSection";
 import { cn } from "../../lib/utils";
 import { SHORTCUTS, type Shortcut } from "../../lib/shortcuts";
 
-export type SettingsTab = "keys" | "profile" | "audio" | "appearance" | "keybinds" | "danger";
+export type SettingsTab = "keys" | "profile" | "modes" | "audio" | "appearance" | "keybinds" | "danger";
 
 interface SettingsDrawerProps {
   isOpen?: boolean;
@@ -41,6 +47,7 @@ interface SettingsDrawerProps {
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "keys", label: "API keys", icon: KeyRound },
   { id: "profile", label: "Profile", icon: User },
+  { id: "modes", label: "Modes", icon: Layers },
   { id: "audio", label: "Audio", icon: AudioLines },
   { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "keybinds", label: "Keybinds", icon: Keyboard },
@@ -83,6 +90,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const resetSettings = useSettingsStore((s) => s.resetSettings);
   const sttMode = useSettingsStore((s) => s.sttMode);
   const setSttMode = useSettingsStore((s) => s.setSttMode);
+  const sttLanguage = useSettingsStore((s) => s.sttLanguage);
+  const sttLanguageNotice = useSettingsStore((s) => s.sttLanguageNotice);
+  const setSttLanguage = useSettingsStore((s) => s.setSttLanguage);
+  const outputLanguage = useSettingsStore((s) => s.outputLanguage);
+  const setOutputLanguage = useSettingsStore((s) => s.setOutputLanguage);
   const apiKeys = useSettingsStore((s) => s.apiKeys);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
@@ -244,7 +256,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         role="tablist"
         aria-label="Settings sections"
         onKeyDown={onTabKeyDown}
-        className="mx-3 grid grid-cols-6 gap-1 rounded-lg bg-sk-fill p-1"
+        className="mx-3 grid grid-cols-7 gap-1"
       >
         {TABS.map(({ id, label, icon: Icon }) => {
           const selected = id === activeTab;
@@ -262,11 +274,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               tabIndex={selected ? 0 : -1}
               onClick={() => setActiveTab(id)}
               className={cn(
-                "flex h-7 items-center justify-center gap-1.5 rounded text-[12px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
-                selected ? "bg-sk-hover text-sk-fg" : "text-sk-fg-3 hover:text-sk-fg-2"
+                "flex min-w-0 flex-col items-center gap-1 rounded-lg py-1.5 text-[12px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
+                selected ? "bg-sk-fill-2 text-sk-fg" : "text-sk-fg-3 hover:bg-sk-fill hover:text-sk-fg-2"
               )}
             >
-              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+              <Icon className="h-4 w-4" aria-hidden="true" />
               <span>{label}</span>
             </button>
           );
@@ -282,6 +294,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         {activeTab === "keys" && <ApiKeyInputs />}
 
         {activeTab === "profile" && <ProfileEditor />}
+
+        {activeTab === "modes" && <ModesTab />}
 
         {activeTab === "audio" && (
           <div className="space-y-4">
@@ -350,6 +364,52 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
               </div>
             )}
+
+            <MicSection />
+
+            <div className="space-y-2 rounded-lg bg-sk-fill p-3">
+              <h3 className="sk-label">Language</h3>
+              <div className="space-y-1.5">
+                <label htmlFor="stt-language" className="sk-meta">
+                  Transcription language
+                </label>
+                <select
+                  id="stt-language"
+                  value={sttLanguage}
+                  onChange={(e) => setSttLanguage(e.target.value as SttLanguage)}
+                  className="sk-field"
+                >
+                  {STT_LANGUAGES.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.name}
+                    </option>
+                  ))}
+                </select>
+                {sttLanguageNotice && (
+                  <p role="status" className="sk-meta text-sk-warn">
+                    {sttLanguageNotice}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="output-language" className="sk-meta">
+                  Output language
+                </label>
+                <select
+                  id="output-language"
+                  value={outputLanguage}
+                  onChange={(e) => setOutputLanguage(e.target.value)}
+                  className="sk-field"
+                >
+                  {OUTPUT_LANGUAGES.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <p className="sk-meta">Answers are written in this language.</p>
+              </div>
+            </div>
 
             <p className="sk-meta">Audio is captured only while a meeting is live.</p>
           </div>
@@ -453,7 +513,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             <div className="space-y-2 rounded-lg bg-sk-fill p-3">
               <h3 className="text-[13px] font-medium text-sk-fg">Reset settings</h3>
               <p className="sk-meta">
-                Restores models, persona, speech and theme settings to their defaults.
+                Restores models, persona, speech, language, microphone and theme settings to their defaults, and the
+                active mode to General. API keys and custom modes are kept.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <button type="button" onClick={() => runDanger("reset")} className="sk-btn-secondary">

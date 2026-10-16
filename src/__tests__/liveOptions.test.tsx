@@ -5,6 +5,7 @@ import {
   fetchLiveOptions,
   formatTranscript,
   liveOptionsErrorMessage,
+  modeLine,
   sanitizeOptions,
 } from "../services/ai/liveOptions";
 import { ProviderHttpError } from "../services/ai/errors";
@@ -255,5 +256,52 @@ describe("LiveOptions and CaptionLine", () => {
     rerender(<CaptionLine />);
     expect(screen.getByText("Groq rejected the API key.")).toBeDefined();
     expect(screen.getByText("System")).toBeDefined();
+  });
+});
+
+describe("live options and the active mode", () => {
+  it("names the active mode and its description in the Groq system prompt, keeping the JSON contract", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": ["Tell me about a conflict."]}'));
+
+    await fetchLiveOptions([turn("interviewer", "Walk me through a hard project.")], {
+      apiKey: "gsk-test",
+      mode: {
+        id: "behavioral",
+        name: "Behavioral",
+        description: "STAR stories: a spoken first-person answer and four talking points.",
+      },
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const system: string = body.messages[0].content;
+    expect(system).toContain("Active mode: Behavioral. STAR stories: a spoken first-person answer and four talking points.");
+    expect(system).toContain('{"asked": string | null, "likely": string[]}');
+    expect(body.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("adds no mode line for General, so its Groq prompt is the plain one", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": []}'));
+
+    await fetchLiveOptions([turn("interviewer", "We use graphs a lot.")], {
+      apiKey: "gsk-test",
+      mode: { id: "general", name: "General", description: "Answers any question." },
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.messages[0].content).not.toContain("Active mode");
+    expect(modeLine({ id: "general", name: "General", description: "Answers any question." })).toBe("");
+  });
+
+  it("the hook sends the mode picked in settings", async () => {
+    setGroqKey("gsk-test");
+    useSettingsStore.setState({ activeModeId: "system_design" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": []}'));
+    render(<HookHost />);
+
+    await act(async () => useSessionStore.getState().addTranscriptTurn(turn("interviewer", "How would you scale this?")));
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.messages[0].content).toContain("Active mode: System Design.");
+    useSettingsStore.setState({ activeModeId: "general" });
   });
 });

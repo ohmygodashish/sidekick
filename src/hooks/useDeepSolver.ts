@@ -17,6 +17,7 @@ import {
   mimeTypeOfDataUrl,
 } from "../services/ai/dispatcher";
 import { assistTurns, formatTranscript, formatTurns } from "../services/ai/liveOptions";
+import { resolveMode } from "../services/ai/modes";
 
 type SolveOptions = Omit<SolveRequest, "question">;
 
@@ -110,7 +111,10 @@ export function useDeepSolver() {
         const model = settings.selectedModel || getDefaultModelForProvider(provider);
 
         // 3. Assemble personalized prompts (REQ-016); earlier answers of the thread are the follow-up context
-        const systemPrompt = buildSystemPrompt(settings.profile);
+        const systemPrompt = buildSystemPrompt(settings.profile, {
+          modeInstructions: resolveMode(settings.activeModeId, settings.modes).instructions,
+          outputLanguage: settings.outputLanguage,
+        });
         const history: Exchange[] = begun.before.flatMap((m) =>
           m.solution ? [{ question: m.question, answer: solutionToText(m.solution) }] : []
         );

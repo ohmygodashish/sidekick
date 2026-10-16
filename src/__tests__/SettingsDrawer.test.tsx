@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 import { SettingsDrawer } from "../components/settings/SettingsDrawer";
 import { useSettingsStore } from "../store/settingsStore";
 import { useSessionStore } from "../store/sessionStore";
+import { useAppStore } from "../store/appStore";
 import * as ipc from "../lib/ipc";
 import { SHORTCUTS } from "../lib/shortcuts";
 
@@ -32,12 +33,20 @@ describe("SettingsDrawer", () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it("renders an inline dialog with six tabs, API keys selected by default", () => {
+    it("renders an inline dialog with seven tabs, API keys selected by default", () => {
       render(<SettingsDrawer isOpen={true} />);
 
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]);
+      expect(tabs.map((t) => t.textContent)).toEqual([
+        "API keys",
+        "Profile",
+        "Modes",
+        "Audio",
+        "Appearance",
+        "Keybinds",
+        "Danger",
+      ]);
       expect(screen.getByRole("tab", { name: "API keys" }).getAttribute("aria-selected")).toBe("true");
     });
 
@@ -106,7 +115,7 @@ describe("SettingsDrawer", () => {
     it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      for (const name of ["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]) {
+      for (const name of ["API keys", "Profile", "Modes", "Audio", "Appearance", "Keybinds", "Danger"]) {
         openTab(name);
         expect(screen.getByRole("dialog").textContent).not.toMatch(
           /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
@@ -119,7 +128,7 @@ describe("SettingsDrawer", () => {
       const palette =
         /(?:^|[\s:])(?:text|bg|ring|border|placeholder|divide|fill)-(?:zinc|sky|red|emerald|amber|orange|slate|gray|white|black)\b/;
 
-      for (const name of ["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]) {
+      for (const name of ["API keys", "Profile", "Modes", "Audio", "Appearance", "Keybinds", "Danger"]) {
         openTab(name);
         const offenders = Array.from(screen.getByRole("dialog").querySelectorAll("[class]"))
           .map((el) => el.getAttribute("class") ?? "")
@@ -504,5 +513,176 @@ describe("SettingsDrawer", () => {
       });
       expect(screen.getByRole("button", { name: "Reset" })).toBeDefined();
     });
+  });
+});
+
+describe("SettingsDrawer microphone and language", () => {
+  const devices = [
+    { name: "MacBook Pro Microphone", isDefault: true },
+    { name: "USB Mic", isDefault: false },
+  ];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    useSettingsStore.getState().resetSettings();
+    useAppStore.setState({ isVisible: true, meetingStatus: "idle" });
+    vi.spyOn(ipc, "listInputDevices").mockResolvedValue(devices);
+    vi.spyOn(ipc, "startMicTest").mockResolvedValue(undefined);
+    vi.spyOn(ipc, "stopMicTest").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists the input devices, with System default naming the current default", async () => {
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+    const select = (await screen.findByLabelText("Input device")) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(3));
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      "System default (MacBook Pro Microphone)",
+      "MacBook Pro Microphone",
+      "USB Mic",
+    ]);
+    expect(ipc.listInputDevices).toHaveBeenCalled();
+  });
+
+  it("pushes the chosen microphone to Rust, and null for the system default", async () => {
+    const safe = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+    const select = (await screen.findByLabelText("Input device")) as HTMLSelectElement;
+
+    fireEvent.change(select, { target: { value: "USB Mic" } });
+    expect(useSettingsStore.getState().micDeviceName).toBe("USB Mic");
+    expect(safe).toHaveBeenCalledWith("set_mic_device", { name: "USB Mic" });
+
+    fireEvent.change(select, { target: { value: "" } });
+    expect(useSettingsStore.getState().micDeviceName).toBeNull();
+    expect(safe).toHaveBeenLastCalledWith("set_mic_device", { name: null });
+  });
+
+  it("pushes the transcription language to Rust and shows the warning it returns under the select", async () => {
+    vi.spyOn(ipc, "safeInvoke").mockImplementation(async (cmd: string) =>
+      cmd === "set_stt_language" ? "The on-device model only transcribes English." : null
+    );
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+    fireEvent.change(screen.getByLabelText("Transcription language"), { target: { value: "hi" } });
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("The on-device model only transcribes English.")
+    );
+    expect(ipc.safeInvoke).toHaveBeenCalledWith("set_stt_language", { language: "hi" });
+  });
+
+  it("offers Auto-detect for transcription but not for the output language, which defaults to English", () => {
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+    const transcription = Array.from((screen.getByLabelText("Transcription language") as HTMLSelectElement).options);
+    const output = Array.from((screen.getByLabelText("Output language") as HTMLSelectElement).options);
+    expect(transcription[0].textContent).toBe("Auto-detect");
+    expect(transcription.map((o) => o.value)).toEqual(["auto", "en", "hi", "es", "fr", "de", "pt", "ja", "zh", "ko", "ar"]);
+    expect(output.map((o) => o.textContent)).not.toContain("Auto-detect");
+    expect((screen.getByLabelText("Output language") as HTMLSelectElement).value).toBe("English");
+
+    fireEvent.change(screen.getByLabelText("Output language"), { target: { value: "Hindi" } });
+    expect(useSettingsStore.getState().outputLanguage).toBe("Hindi");
+  });
+
+  it("runs the microphone test from the Test button and stops it on the second press", async () => {
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+    expect(ipc.startMicTest).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop test" }));
+    expect(ipc.stopMicTest).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Test" })).toBeDefined();
+  });
+
+  it("shows Rust's rejection message inline and stays idle", async () => {
+    vi.spyOn(ipc, "startMicTest").mockRejectedValue("Stop listening before testing the microphone.");
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+    expect(await screen.findByRole("alert")).toBeDefined();
+    expect(screen.getByRole("alert").textContent).toBe("Stop listening before testing the microphone.");
+    expect(screen.getByRole("button", { name: "Test" })).toBeDefined();
+  });
+
+  it("ends a running test when the tab changes or the drawer closes", async () => {
+    const { rerender } = render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+
+    openTab("Profile");
+    expect(ipc.stopMicTest).toHaveBeenCalledTimes(1);
+
+    openTab("Audio");
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+
+    rerender(<SettingsDrawer isOpen={false} />);
+    expect(ipc.stopMicTest).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives every tab an icon above its label, in an even seven-column strip", () => {
+    render(<SettingsDrawer isOpen={true} />);
+
+    const strip = screen.getByRole("tablist");
+    expect(strip.className).toContain("grid-cols-7");
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.querySelector("svg")).not.toBeNull();
+      expect(tab.querySelector("span")?.textContent).toBe(tab.textContent);
+    }
+  });
+
+  it("disables Test outside idle, and stops a running test when a meeting starts", async () => {
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+
+    act(() => useAppStore.setState({ meetingStatus: "starting" }));
+
+    await waitFor(() => expect(ipc.stopMicTest).toHaveBeenCalledTimes(1));
+    expect((screen.getByRole("button", { name: "Test" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Stop listening before testing the microphone.")).toBeDefined();
+
+    act(() => useAppStore.setState({ meetingStatus: "idle" }));
+    expect((screen.getByRole("button", { name: "Test" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("stops a running test when Sidekick hides, and the drawer stays mounted", async () => {
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+
+    act(() => useAppStore.setState({ isVisible: false }));
+
+    await waitFor(() => expect(ipc.stopMicTest).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Test" })).toBeDefined();
+  });
+
+  it("restarts a running test on the new device: stop, then set the device, then start", async () => {
+    const safe = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+    render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined());
+
+    fireEvent.change(await screen.findByLabelText("Input device"), { target: { value: "USB Mic" } });
+
+    await waitFor(() => expect(ipc.startMicTest).toHaveBeenCalledTimes(2));
+    const stopped = vi.mocked(ipc.stopMicTest).mock.invocationCallOrder[0];
+    const setIndex = safe.mock.calls.findIndex(([cmd]) => cmd === "set_mic_device");
+    const deviceSet = safe.mock.invocationCallOrder[setIndex];
+    const started = vi.mocked(ipc.startMicTest).mock.invocationCallOrder[1];
+    expect(safe.mock.calls[setIndex]).toEqual(["set_mic_device", { name: "USB Mic" }]);
+    expect(stopped).toBeLessThan(deviceSet);
+    expect(deviceSet).toBeLessThan(started);
+    expect(screen.getByRole("button", { name: "Stop test" })).toBeDefined();
   });
 });

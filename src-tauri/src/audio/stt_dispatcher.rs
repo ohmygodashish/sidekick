@@ -250,6 +250,21 @@ pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
+/// Transcription languages the settings UI offers: "auto" (detect) or an ISO-639-1 code
+pub const STT_LANGUAGES: [&str; 11] = ["auto", "en", "hi", "es", "fr", "de", "pt", "ja", "zh", "ko", "ar"];
+
+/// Checks a language chosen in settings against `STT_LANGUAGES`
+pub fn validate_stt_language(language: &str) -> Result<String, String> {
+    if STT_LANGUAGES.contains(&language) {
+        Ok(language.to_string())
+    } else {
+        Err(format!(
+            "Unsupported transcription language '{language}'. Use auto or one of: {}",
+            STT_LANGUAGES[1..].join(", ")
+        ))
+    }
+}
+
 /// Central Speech-to-Text Dispatcher
 pub struct SttDispatcher {
     active_engine: RwLock<SttEngineType>,
@@ -304,6 +319,13 @@ impl SttDispatcher {
         &self.local_whisper
     }
 
+    /// Sets the spoken language for every engine, validated against `STT_LANGUAGES`
+    pub fn set_language(&self, language: &str) -> Result<(), String> {
+        let language = validate_stt_language(language)?;
+        self.local_whisper.set_language(&language);
+        Ok(())
+    }
+
     /// Reloads model weights into the local Whisper engine
     pub fn reload_whisper_model(&self, model_name: &str) -> Result<PathBuf, String> {
         self.local_whisper.load_model(model_name)
@@ -344,12 +366,13 @@ impl SttDispatcher {
 
     /// Cloud transcription with a local fallback. A turn counts as recovered only when a real model ran.
     fn transcribe_cloud(&self, engine: SttEngineType, chunk: &AudioChunk) -> (String, Option<SttFailure>) {
+        let language = self.local_whisper.language();
         let result = match cloud_api_key(engine) {
             None => Err(CloudError::MissingKey),
             Some(key) if engine == SttEngineType::Groq => {
-                call_groq_whisper_api(&key, &chunk.samples, chunk.sample_rate)
+                call_groq_whisper_api(&key, &chunk.samples, chunk.sample_rate, &language)
             }
-            Some(key) => call_deepgram_api(&key, &chunk.samples, chunk.sample_rate),
+            Some(key) => call_deepgram_api(&key, &chunk.samples, chunk.sample_rate, &language),
         };
         let err = match result {
             Ok(text) => return (text, None),
@@ -407,19 +430,36 @@ fn status_failure(status: reqwest::StatusCode) -> CloudError {
     }
 }
 
+/// Groq's optional `language` field: omitted for "auto" so Groq detects the language
+fn groq_language_field(language: &str) -> Option<&str> {
+    (language != "auto").then_some(language)
+}
+
+/// Deepgram's listen URL: a `language` code, or language detection for "auto"
+fn deepgram_listen_url(language: &str) -> String {
+    const BASE: &str = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true";
+    if language == "auto" {
+        format!("{BASE}&detect_language=true")
+    } else {
+        format!("{BASE}&language={language}")
+    }
+}
+
 /// Helper to call Groq Whisper API for low-latency cloud transcription
-fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, CloudError> {
+fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32, language: &str) -> Result<String, CloudError> {
     let wav_bytes = encode_wav_pcm16(samples, sample_rate);
     let part = reqwest::multipart::Part::bytes(wav_bytes)
         .file_name("speech.wav")
         .mime_str("audio/wav")
         .map_err(|_| CloudError::Failed("bad audio part".to_string()))?;
 
-    let form = reqwest::multipart::Form::new()
+    let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("model", "whisper-large-v3-turbo")
-        .text("response_format", "json")
-        .text("language", "en");
+        .text("response_format", "json");
+    if let Some(code) = groq_language_field(language) {
+        form = form.text("language", code.to_string());
+    }
 
     let client = cloud_client()?;
     let response = tauri::async_runtime::block_on(async {
@@ -450,13 +490,13 @@ fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Re
 }
 
 /// Helper to call Deepgram Nova-2 API for cloud speech transcription
-fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, CloudError> {
+fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32, language: &str) -> Result<String, CloudError> {
     let wav_bytes = encode_wav_pcm16(samples, sample_rate);
     let client = cloud_client()?;
 
     let response = tauri::async_runtime::block_on(async {
         client
-            .post("https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")
+            .post(deepgram_listen_url(language))
             .header("Authorization", format!("Token {api_key}"))
             .header("Content-Type", "audio/wav")
             .body(wav_bytes)
@@ -747,6 +787,50 @@ mod tests {
         let active3 = dispatcher.set_engine("whisper_local").unwrap();
         assert_eq!(active3, "whisper_local");
         assert_eq!(dispatcher.get_engine(), SttEngineType::WhisperLocal);
+    }
+
+    #[test]
+    fn test_stt_language_validation() {
+        for code in STT_LANGUAGES {
+            assert_eq!(validate_stt_language(code).unwrap(), code);
+        }
+        assert!(validate_stt_language("xx").is_err());
+        assert!(validate_stt_language("").is_err());
+        assert!(validate_stt_language("EN").is_err(), "codes are exact, as the settings UI sends them");
+    }
+
+    #[test]
+    fn test_groq_language_field_omitted_for_auto() {
+        assert_eq!(groq_language_field("auto"), None);
+        assert_eq!(groq_language_field("hi"), Some("hi"));
+        assert_eq!(groq_language_field("en"), Some("en"));
+    }
+
+    #[test]
+    fn test_deepgram_listen_url_language_suffix() {
+        assert_eq!(
+            deepgram_listen_url("auto"),
+            "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&detect_language=true"
+        );
+        assert_eq!(
+            deepgram_listen_url("ja"),
+            "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=ja"
+        );
+    }
+
+    #[test]
+    fn test_set_language_reaches_whisper_and_rejects_unknown() {
+        let dispatcher = SttDispatcher::new_mock(None);
+        assert_eq!(dispatcher.local_whisper().language(), "en");
+
+        dispatcher.set_language("hi").unwrap();
+        assert_eq!(dispatcher.local_whisper().language(), "hi");
+
+        dispatcher.set_language("auto").unwrap();
+        assert_eq!(dispatcher.local_whisper().language(), "auto");
+
+        assert!(dispatcher.set_language("klingon").is_err());
+        assert_eq!(dispatcher.local_whisper().language(), "auto", "a rejected code changes nothing");
     }
 
     #[test]

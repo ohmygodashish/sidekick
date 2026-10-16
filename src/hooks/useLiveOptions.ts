@@ -4,6 +4,7 @@ import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import { safeInvoke } from "../lib/ipc";
 import { fetchLiveOptions, liveOptionsErrorMessage } from "../services/ai/liveOptions";
+import { resolveMode } from "../services/ai/modes";
 
 export interface LiveOption {
   text: string;
@@ -58,12 +59,13 @@ export function useLiveOptions() {
 
       const controller = new AbortController();
       inFlight = controller;
-      const { apiKeys, evaluatorModel } = useSettingsStore.getState();
+      const { apiKeys, evaluatorModel, activeModeId, modes } = useSettingsStore.getState();
       try {
         const result = await fetchLiveOptions(turns, {
           apiKey: apiKeys.groq,
           model: evaluatorModel,
           signal: controller.signal,
+          mode: resolveMode(activeModeId, modes),
         });
         if (controller.signal.aborted) return;
         useSessionStore.setState((s) => ({

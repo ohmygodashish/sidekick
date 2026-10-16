@@ -41,6 +41,7 @@ pub use whisper::{
 pub const EVENT_AUDIO_TURN_COMPLETED: &str = "sidekick://audio_turn_completed";
 pub const EVENT_AUDIO_STATUS_CHANGED: &str = "sidekick://audio_status_changed";
 pub const EVENT_AUDIO_LEVEL: &str = "sidekick://audio_level";
+pub const EVENT_MIC_TEST_LEVEL: &str = "sidekick://mic_test_level";
 pub const EVENT_STT_MODEL_DOWNLOAD_PROGRESS: &str = "sidekick://stt_model_download_progress";
 pub const EVENT_STT_MODEL_DOWNLOAD_COMPLETED: &str = "sidekick://stt_model_download_completed";
 
@@ -92,6 +93,12 @@ pub struct AudioState {
     sink_open: Arc<AtomicBool>,
     is_capturing: AtomicBool,
     is_panicked: Arc<AtomicBool>,
+    /// Microphone the user picked, by name; `None` is the system default
+    mic_device: Mutex<Option<String>>,
+    /// Running microphone test (mic only, no transcription)
+    mic_test: Mutex<Option<MicAudioCapture>>,
+    /// Closed before the test stream stops, so late buffers emit no level events
+    mic_test_open: Arc<AtomicBool>,
 }
 
 impl Default for AudioState {
@@ -117,6 +124,9 @@ impl AudioState {
             sink_open: Arc::new(AtomicBool::new(false)),
             is_capturing: AtomicBool::new(false),
             is_panicked,
+            mic_device: Mutex::new(None),
+            mic_test: Mutex::new(None),
+            mic_test_open: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -162,6 +172,7 @@ impl AudioState {
         config: AudioCaptureConfig,
     ) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        self.close_mic_test();
         if self.is_capturing.load(Ordering::SeqCst) {
             return Ok(Vec::new());
         }
@@ -206,9 +217,17 @@ impl AudioState {
             }
         }
 
-        // 3. Channel 1: Candidate Microphone Audio
+        // 3. Channel 1: Candidate Microphone Audio, from the chosen device when it is still connected
         if config.capture_candidate {
-            match MicAudioCapture::start(self.channel_sink(app.clone(), Channel::Candidate)) {
+            let chosen = self.mic_device.lock().map_err(|e| e.to_string())?.clone();
+            let device = match chosen {
+                Some(name) if !mic_audio::input_device_present(&name) => {
+                    warnings.push(format!("Microphone '{name}' wasn't found, so the default microphone is used."));
+                    None
+                }
+                other => other,
+            };
+            match MicAudioCapture::start(device.as_deref(), self.channel_sink(app.clone(), Channel::Candidate)) {
                 Ok(mic) => {
                     let mut guard = self.mic_stream.lock().map_err(|e| e.to_string())?;
                     *guard = Some(mic);
@@ -309,6 +328,61 @@ impl AudioState {
         Ok(())
     }
 
+    /// Starts the microphone test: opens only the selected microphone and emits `EVENT_MIC_TEST_LEVEL`.
+    /// Does nothing if a test is already running.
+    pub fn start_mic_test<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        if self.is_capturing.load(Ordering::SeqCst) {
+            return Err("Stop listening before testing the microphone.".to_string());
+        }
+        if self.mic_test.lock().map_err(|e| e.to_string())?.is_some() {
+            return Ok(());
+        }
+
+        let name = self.mic_device.lock().map_err(|e| e.to_string())?.clone();
+        self.mic_test_open.store(true, Ordering::SeqCst);
+        let open = self.mic_test_open.clone();
+        let app = app.clone();
+        let meter = Mutex::new(mic_audio::MicLevelWindow::default());
+        let capture = MicAudioCapture::start(name.as_deref(), move |samples: &[f32], sample_rate: u32, channels: u16| {
+            if !open.load(Ordering::SeqCst) {
+                return;
+            }
+            let reading = meter.lock().ok().and_then(|mut m| m.push(samples, sample_rate, channels));
+            if let Some((db, peak_db)) = reading {
+                let _ = app.emit(EVENT_MIC_TEST_LEVEL, serde_json::json!({ "db": db, "peakDb": peak_db }));
+            }
+        })
+        .map_err(|e| {
+            self.mic_test_open.store(false, Ordering::SeqCst);
+            friendly_warning(Channel::Candidate, &e)
+        })?;
+
+        *self.mic_test.lock().map_err(|e| e.to_string())? = Some(capture);
+        // A purge that landed while the microphone was opening has already run, so the test must not outlive it
+        if !self.mic_test_open.load(Ordering::SeqCst) {
+            self.close_mic_test();
+        }
+        Ok(())
+    }
+
+    /// Stops the microphone test if one is running
+    pub fn stop_mic_test(&self) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        self.close_mic_test();
+        Ok(())
+    }
+
+    /// Stops the microphone test without taking `lifecycle`, so purge can call it. Stops are asynchronous,
+    /// which is why the emit gate closes first.
+    fn close_mic_test(&self) {
+        self.mic_test_open.store(false, Ordering::SeqCst);
+        let mic = self.mic_test.lock().ok().and_then(|mut g| g.take());
+        if let Some(mut mic) = mic {
+            mic.stop();
+        }
+    }
+
     /// Closes the sink, then stops both streams. Stops run outside the stream locks: the
     /// synchronous state query on the main thread also takes them.
     fn close_streams(&self) {
@@ -342,6 +416,7 @@ impl AudioState {
                 stream.stop();
             }
         }
+        self.close_mic_test();
 
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.purge();
@@ -376,6 +451,23 @@ fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, interviewer: f32, candidate:
         EVENT_AUDIO_LEVEL,
         serde_json::json!({ "interviewer": interviewer, "candidate": candidate }),
     );
+}
+
+const ENGLISH_ONLY_MODEL_MESSAGE: &str =
+    "The on-device model only understands English. Switch to Groq or Deepgram for other languages.";
+const DEEPGRAM_ARABIC_MESSAGE: &str =
+    "Deepgram may not transcribe Arabic with its current model. If captions fail, switch to Groq.";
+
+/// Warns when the on-device model cannot transcribe the chosen language (`.en` models are English-only)
+fn english_only_model_warning(engine: SttEngineType, model_filename: &str, language: &str) -> Option<String> {
+    let english_only = model_filename.ends_with(".en.bin");
+    (engine == SttEngineType::WhisperLocal && english_only && language != "en")
+        .then(|| ENGLISH_ONLY_MODEL_MESSAGE.to_string())
+}
+
+/// Warns when Deepgram's current model may not transcribe Arabic
+fn deepgram_arabic_warning(engine: SttEngineType, language: &str) -> Option<String> {
+    (engine == SttEngineType::Deepgram && language == "ar").then(|| DEEPGRAM_ARABIC_MESSAGE.to_string())
 }
 
 pub mod commands {
@@ -473,6 +565,51 @@ pub mod commands {
 
         Ok(path.to_string_lossy().to_string())
     }
+
+    /// Lists connected microphones; the system default is marked `isDefault`. Async because CoreAudio
+    /// enumeration can stall on Bluetooth devices, so it runs off the main thread.
+    #[tauri::command]
+    pub async fn list_input_devices() -> Result<Vec<mic_audio::InputDevice>, String> {
+        tauri::async_runtime::spawn_blocking(mic_audio::list_input_devices)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Picks the microphone for the next start or mic test; `None` is the system default
+    #[tauri::command]
+    pub fn set_mic_device(state: State<'_, AudioState>, name: Option<String>) -> Result<(), String> {
+        let name = name.filter(|n| !n.trim().is_empty());
+        *state.mic_device.lock().map_err(|e| e.to_string())? = name;
+        Ok(())
+    }
+
+    /// Sets the transcription language ("auto" or an ISO-639-1 code). Returns a warning when the
+    /// selected engine may not transcribe that language.
+    #[tauri::command]
+    pub fn set_stt_language(state: State<'_, AudioState>, language: String) -> Result<Option<String>, String> {
+        state.dispatcher.set_language(&language)?;
+        let engine_type = state.dispatcher.get_engine();
+        let local = state.dispatcher.local_whisper();
+        let language = local.language();
+        Ok(english_only_model_warning(engine_type, &whisper::normalize_model_filename(&local.model_name()), &language)
+            .or_else(|| deepgram_arabic_warning(engine_type, &language)))
+    }
+
+    /// Starts the microphone test (mic only, no transcription). Async so the blocking microphone start runs off the main thread.
+    #[tauri::command]
+    pub async fn start_mic_test(app: AppHandle) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || app.state::<AudioState>().start_mic_test(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Stops the microphone test
+    #[tauri::command]
+    pub async fn stop_mic_test(app: AppHandle) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || app.state::<AudioState>().stop_mic_test())
+            .await
+            .map_err(|e| e.to_string())?
+    }
 }
 
 #[cfg(test)]
@@ -542,6 +679,37 @@ mod tests {
     fn test_friendly_warning_keeps_other_errors() {
         assert_eq!(friendly_warning(Channel::Interviewer, "no display"), "System audio is off: no display");
         assert_eq!(friendly_warning(Channel::Candidate, "no device"), "Microphone is off: no device");
+    }
+
+    #[test]
+    fn test_english_only_model_warning_rule() {
+        assert_eq!(
+            english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "hi").as_deref(),
+            Some("The on-device model only understands English. Switch to Groq or Deepgram for other languages.")
+        );
+        assert!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "auto").is_some());
+        assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "en"), None);
+        assert_eq!(english_only_model_warning(SttEngineType::Groq, "ggml-tiny.en.bin", "hi"), None);
+        assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-base.bin", "hi"), None);
+    }
+
+    #[test]
+    fn test_deepgram_arabic_warning_rule() {
+        assert_eq!(
+            deepgram_arabic_warning(SttEngineType::Deepgram, "ar").as_deref(),
+            Some("Deepgram may not transcribe Arabic with its current model. If captions fail, switch to Groq.")
+        );
+        assert_eq!(deepgram_arabic_warning(SttEngineType::Groq, "ar"), None);
+        assert_eq!(deepgram_arabic_warning(SttEngineType::WhisperLocal, "ar"), None);
+        assert_eq!(deepgram_arabic_warning(SttEngineType::Deepgram, "hi"), None);
+        assert_eq!(deepgram_arabic_warning(SttEngineType::Deepgram, "auto"), None);
+    }
+
+    #[test]
+    fn test_stop_mic_test_without_test_is_ok() {
+        let state = AudioState::default();
+        assert!(state.stop_mic_test().is_ok());
+        assert!(state.mic_test.lock().unwrap().is_none());
     }
 
     #[test]

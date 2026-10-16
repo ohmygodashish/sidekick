@@ -31,15 +31,15 @@ describe("ProgressiveCard", () => {
     useAppStore.setState({ isAskOpen: false });
   });
 
-  it("renders the summary and at most three tradeoffs", () => {
+  it("renders the summary and up to four tradeoffs, the four STAR talking points", () => {
     render(<ProgressiveCard solution={solution} />);
 
     expect(screen.getByTestId("answer-summary").textContent).toBe(
       "Use a sliding window counter backed by a sorted set."
     );
     expect(screen.getByText("Trade A")).toBeDefined();
-    expect(screen.getByText("Trade C")).toBeDefined();
-    expect(screen.queryByText("Trade D")).toBeNull();
+    expect(screen.getByText("Trade D")).toBeDefined();
+    expect(screen.queryAllByRole("listitem").filter((li) => li.textContent?.startsWith("Trade")).length).toBe(4);
   });
 
   it("shows the code expanded by default and collapses it", () => {

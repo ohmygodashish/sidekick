@@ -16,6 +16,7 @@ import { Tip } from "./Tip";
 import { cn } from "../../lib/utils";
 import { usePresence } from "../../hooks/usePresence";
 import { getShortcut, type ShortcutId } from "../../lib/shortcuts";
+import { allModes, resolveMode } from "../../services/ai/modes";
 
 interface MenuItemProps {
   icon: LucideIcon;
@@ -65,6 +66,10 @@ export const BarMenu: React.FC = () => {
   const toggleClickThrough = useAppStore((state) => state.toggleClickThrough);
   const triggerPanic = useAppStore((state) => state.triggerPanic);
   const toggleSettings = useSettingsStore((state) => state.toggleSettings);
+  const customModes = useSettingsStore((state) => state.modes);
+  const activeModeId = useSettingsStore((state) => state.activeModeId);
+  const setActiveMode = useSettingsStore((state) => state.setActiveMode);
+  const activeMode = resolveMode(activeModeId, customModes);
 
   // Focus the first menu item when the menu opens
   useEffect(() => {
@@ -168,6 +173,33 @@ export const BarMenu: React.FC = () => {
             shortcut="open_settings"
             onSelect={choose(toggleSettings)}
           />
+          <div role="separator" className="my-1 h-px bg-sk-line" />
+          <div role="group" aria-label="Mode">
+            <div className="flex items-center gap-2 px-2.5 pb-0.5 pt-1 text-[12px] text-sk-fg-3">
+              <span className="flex-1">Mode</span>
+              <span className="min-w-0 truncate">{activeMode.name}</span>
+            </div>
+            <div className="max-h-48 overflow-y-auto sk-scroll">
+              {allModes(customModes).map((mode) => {
+                // Checked against the resolved mode, so a deleted custom mode shows General as checked
+                const active = mode.id === activeMode.id;
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={active}
+                    title={mode.description}
+                    className="sk-menu-item"
+                    onClick={choose(() => setActiveMode(mode.id))}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{mode.name}</span>
+                    {active && <Check className="h-3.5 w-3.5 shrink-0 text-sk-accent" aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div role="separator" className="my-1 h-px bg-sk-line" />
           <MenuItem
             icon={OctagonX}
