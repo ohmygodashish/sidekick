@@ -2,14 +2,14 @@
 title: Sidekick Invisible Interview & Meeting Copilot Architecture Specification
 version: 1.0.0
 date_created: 2026-10-15
-last_updated: 2026-10-16
+last_updated: 2026-10-17
 owner: Sidekick Engineering Team
 tags: [architecture, design, app, stealth, audio, ai, macos]
 ---
 
 # Introduction
 
-Sidekick is a hyper-lightweight, screen-share invisible desktop application for macOS built with Tauri v2 (Rust) and React 19. It acts as a real-time copilot during technical interviews (coding, system design, behavioral) and high-stakes meetings. It achieves zero-suspicion operation through OS-level window invisibility (`NSWindowSharingNone`), Dock/app-switcher concealment, instant silent active-window vision capture, driverless dual-audio ingestion (system meeting sound via `ScreenCaptureKit` + microphone), live numbered question options (the question just asked plus likely next ones), and progressive disclosure problem solving powered by a multi-provider AI gateway (OpenRouter, Anthropic, OpenAI, Google Gemini) and embedded offline `whisper.cpp`.
+Sidekick is a hyper-lightweight, screen-share invisible desktop application for macOS built with Tauri v2 (Rust) and React 19. It acts as a real-time copilot during technical interviews (coding, system design, behavioral) and high-stakes meetings. It achieves zero-suspicion operation through OS-level window invisibility (`NSWindowSharingNone`), Dock/app-switcher concealment, silent screen capture for answers, behind two screen toggles, driverless dual-audio ingestion (system meeting sound via `ScreenCaptureKit` + microphone), live numbered question options (the question just asked plus likely next ones), and progressive disclosure problem solving powered by a multi-provider AI gateway (OpenRouter, Anthropic, OpenAI), Groq for live options, and embedded offline `whisper.cpp`.
 
 ## 1. Purpose & Scope
 
@@ -21,11 +21,12 @@ This specification defines the architectural structure, component boundaries, da
 * **Core Capabilities**:
   * Screen-share invisibility preventing capture by Zoom, Google Meet, Microsoft Teams, Slack, Discord, QuickTime, and OBS.
   * System audio capture of meeting participants without virtual audio drivers (BlackHole/Loopback).
-  * On-device speech-to-text using Metal-accelerated `whisper.cpp` alongside optional cloud STT toggles.
+  * On-device speech-to-text using Metal-accelerated `whisper.cpp` alongside optional Groq Whisper.
   * Live numbered options during the conversation: the question just asked (pinned) and three likely next questions, updated after every turn and answered on demand with `Cmd + Option + 1/2/3`.
-  * Frontmost active-window vision capture without manual crosshair selection.
+  * Follow-up threads with six exchanges of context, New chat, a meeting-only History, and `Cmd + Enter` Assist.
+  * Screen context for answers: when a prompt uses the screen, the frontmost window is captured silently (Ask-box and options toggles; Assist always). No crosshair selection.
   * Progressive disclosure solution rendering across 3 structured tiers (Intuition $\rightarrow$ Code $\rightarrow$ Complexity).
-  * Multi-provider gateway for OpenRouter, Anthropic, OpenAI, Google Gemini and Groq with API keys stored in a local config file (`~/.config/sidekick/config.json`, mode `0600`).
+  * Answers from OpenRouter, Anthropic or OpenAI, live options and optional speech-to-text on Groq, with API keys stored in a local config file (`~/.config/sidekick/config.json`, mode `0600`).
   * A click-through overlay (clicks pass through everywhere except the visible UI) with System, Light and Dark themes.
 * **Out of Scope**: Windows or Linux native builds for v1.0 (macOS AppKit specialization is required for driverless `ScreenCaptureKit` and `NSWindowSharingNone`).
 
@@ -52,40 +53,41 @@ This specification defines the architectural structure, component boundaries, da
 
 ### 3.1 Functional Requirements
 - **REQ-001 (Screen-Share Invisibility)**: The window server MUST assign `NSWindow.sharingType = .none` to all overlay windows immediately upon window allocation.
-- **REQ-002 (Headless Phantom / Hotkey-Only Control)**: The application runtime MUST configure `NSApplicationActivationPolicyAccessory` before showing any UI, suppressing Dock icons and `Cmd + Tab` inclusion. Furthermore, the application MUST NOT register any system Status Bar item, Menu Bar icon, or System Tray icon. The application MUST be 100% headless with zero persistent visual footprint on the OS, summoned and dismissed purely via global hotkeys (`Cmd + Shift + Space` to toggle, `Cmd + Esc` to panic hide). Access to Application Settings MUST only be accessible from within the overlay UI (or via `Cmd + ,` while the overlay is visible) once summoned.
+- **REQ-002 (Headless Phantom / Hotkey-Only Control)**: The application runtime MUST configure `NSApplicationActivationPolicyAccessory` before showing any UI, suppressing Dock icons and `Cmd + Tab` inclusion. Furthermore, the application MUST NOT register any system Status Bar item, Menu Bar icon, or System Tray icon. The application MUST be 100% headless with zero persistent visual footprint on the OS, summoned and dismissed purely via global hotkeys (`Cmd + \` to show or hide, `Shift + Cmd + \` to start or stop listening, `Cmd + Esc` to panic: hide, wipe and quit). Access to Application Settings MUST only be accessible from within the overlay UI (or via `Cmd + ,` while the overlay is visible) once summoned. Showing or hiding MUST never take keyboard focus from the app the user is using: the window is a non-activating panel. Clicking a text field MUST give it the keyboard, and send or Esc MUST hand focus back.
 - **REQ-003 (Z-Index / Level)**: The overlay window MUST be assigned `NSWindow.Level.floating` and `NSWindowCollectionBehaviorFullScreenAuxiliary` to remain accessible above full-screen IDEs and video conference apps.
-- **REQ-004 (Panic Shutdown)**: Global hotkey `Cmd + Esc` MUST synchronously hide all windows, terminate audio capture pipelines, abort in-flight network streams, and purge prompt buffers in <25ms.
+- **REQ-004 (Panic Shutdown)**: Global hotkey `Cmd + Esc` MUST synchronously hide the window in <25ms, stop audio capture and wipe its buffers, abort in-flight network streams, delete the session database, and then exit the process. It MUST NOT ask for confirmation; the user relaunches the app to use it again.
 - **REQ-005 (Click-Through Mode)**: Outside click-through mode, the window MUST pass mouse events to background applications everywhere except over the visible UI surfaces (the frontend reports their rects; `hit_region.rs` polls the cursor and toggles `set_ignore_cursor_events`). Global hotkey `Cmd + Shift + C` MUST force pass-through everywhere, shown by an amber outline on the bar and a pill under it.
 - **REQ-006 (Minimal Overlay UI)**: The window MUST be one fixed transparent window at the top-centre of the main screen that never resizes (resizing WKWebView repaints the page). The user interface MUST consist of one control bar, a caption and live options while listening (REQ-011), and one panel slot below:
-  - *Control bar*: Start/Stop meeting (fixed width; level dots and elapsed time while live), Ask (opens a typed question), Hide (`Cmd + Shift + Space`), and a menu with opacity (15%–100%), compact view (`Cmd + Shift + M`), click-through (`Cmd + Shift + C`), settings (`Cmd + ,`) and panic (`Cmd + Esc`). The bar MUST be draggable (requires the `core:window:allow-start-dragging` capability).
+  - *Control bar*: Start/Stop meeting (`Shift + Cmd + \`; fixed width; level dots and elapsed time while live), Ask (opens a typed question), Hide (`Cmd + \`), and a menu with opacity (15%–100%), compact view (`Cmd + Shift + M`), click-through (`Cmd + Shift + C`), settings (`Cmd + ,`) and panic (`Cmd + Esc`). Start/Stop and Hide MUST show their shortcut in a hover tooltip. The bar MUST be draggable (requires the `core:window:allow-start-dragging` capability).
   - *Panel*: shows either the answer (REQ-015) or settings, never both. Compact view (layout value `dynamic_notch`) hides the panel and leaves only the bar.
 - **REQ-007 (Driverless Audio Ingestion)**: Meeting audio MUST be captured via `ScreenCaptureKit` system audio stream without requiring third-party kernel extensions or virtual audio cables. Candidate audio MUST be ingested via default microphone.
 - **REQ-008 (Speaker Diarization)**: Ingested audio MUST be split into two discrete logical channels: Channel 0 (Interviewer / System) and Channel 1 (Candidate / Mic).
 - **REQ-009 (Embedded Offline STT)**: The application MUST embed `whisper.cpp` compiled with Apple Metal support to perform 100% on-device speech transcription without external network requests.
-- **REQ-010 (Cloud STT Option)**: The application MUST support toggling to Cloud STT (Deepgram Nova-2 / Groq Whisper) via user settings.
+- **REQ-010 (Cloud STT Option)**: The application MUST support choosing Groq Whisper (`whisper-large-v3-turbo`) instead of on-device Whisper in Settings → Audio.
 - **REQ-011 (Live Options)**: While a meeting is live (REQ-018), after every transcript turn a fast evaluator (Groq, `qwen/qwen3.8-27b` by default) MUST receive the recent transcript (last 12 turns, as data inside `<transcript>` delimiters) and return the question the interviewer just asked (or none) and three likely next questions. The UI MUST show up to three numbered options: the asked question pinned in slot 1, marked "Asked", until the next question is asked, then the likely ones. Only one request MAY run at a time; turns that arrive meanwhile MUST trigger one rerun with the latest transcript. Without a Groq key, a local heuristic MUST still spot asked questions. Nothing is answered automatically.
 - **REQ-012 (On-Demand Deep Trigger)**: The user MUST be able to answer option 1, 2 or 3 by clicking it or with the global hotkeys `Cmd + Option + 1/2/3` (which also summon a hidden overlay); the recent conversation MUST be sent as context. Ask MUST open a box where the user can type a question; the same box MUST accept follow-ups.
 - **REQ-019 (Listening Feedback)**: While live, the bar MUST show two level dots (system audio and microphone, from the throttled `sidekick://audio_level` event), and a two-line caption MUST show the latest sentence from each source. Speech-to-text failures MUST be reported (`sidekick://stt_error`) and shown in the caption; transcript text MUST never be invented.
-- **REQ-020 (Themes)**: The UI MUST offer System, Light and Dark themes in Settings → Appearance; System MUST follow the macOS appearance as it changes.
-- **REQ-013 (Silent Active Window Capture)**: Global hotkey `Cmd + Shift + S` MUST identify the frontmost active window and capture its visual bounds without displaying crosshairs, drag frames, or emitting system capture sounds.
+- **REQ-020 (Themes)**: The UI MUST offer System, Light and Dark themes in Settings → General (Appearance); System MUST follow the macOS appearance as it changes.
+- **REQ-013 (Silent Active Window Capture)**: Removed (16 Oct 2026). The `Cmd + Shift + S` capture was replaced by the screen toggles; see REQ-021.
 - **REQ-014 (Multi-Provider Deep Gateway)**: The Deep Intelligence Engine MUST support direct API integration for:
-  - OpenRouter (default `anthropic/claude-haiku-5.5`)
-  - Anthropic Direct (default `claude-haiku-5-5`)
-  - OpenAI Direct (default `gpt-5.6-luna`)
-  - Google Gemini Direct (default `gemini-3.8-flash`)
-  - Groq (default `openai/gpt-oss-120b`)
+  - OpenRouter (default `anthropic/claude-haiku-5.5`; Haiku 5.5, Sonnet 5.5, Opus 5.5, GPT-6 Luna and GPT-6.1 Sol)
+  - Anthropic Direct (default `claude-haiku-5-5`; Sonnet 5.5 and Opus 5.5)
+  - OpenAI Direct (default `gpt-6-luna`; GPT-6.1 Sol)
+  Google Gemini and Groq answers were removed (16 Oct 2026). Groq is used for live options and optional speech-to-text only.
   A missing key, provider error, 25 s stall or empty answer MUST be shown as a short error; the engine MUST NOT substitute a canned answer.
 - **REQ-015 (Progressive Disclosure Rendering)**: Output from the Deep Engine MUST render in one answer panel, in this order:
   1. *Stage 1*: a short answer with up to three key points, always visible.
   2. *Stage 2*: a Code row (syntax-highlighted, copyable), expanded by default.
   3. *Stage 3*: a Complexity row (Big-O and edge cases), collapsed by default.
-  The previous answer MUST be cleared when a new solve starts, a working state MUST be shown while solving, errors MUST be shown with a Retry action, and closing the panel MUST cancel an in-flight solve.
+  A pick or `Cmd + Enter` Assist MUST start a new thread (the previous thread stays in History; see REQ-022), a follow-up MUST add a message to the current thread, a working state MUST be shown while solving, errors MUST be shown with a Retry action, and closing the panel MUST cancel an in-flight solve.
 - **REQ-016 (Personalization Profiles)**: The engine MUST incorporate user-provided resume text (pasted, or a `.txt`/`.md` file up to 200 KB; other formats, including PDF, are rejected with a message), job descriptions, seniority and tone (concise, balanced, deep, staff, system_architect) into the LLM system prompt.
 - **REQ-017 (Session Wipe / Burn)**: The UI MUST provide a "Burn Session" command, confirmed by a second click within 3 seconds, that immediately purges local SQLite cache, memory buffers and temporary files, and ends the meeting. It MUST NOT touch the config file (SEC-001). "Reset Settings" MUST use the same two-click confirm and MUST keep API keys.
-- **REQ-018 (User-Controlled Meeting Capture)**: Audio capture MUST NOT start at launch or on summon. It MUST start only when the user presses Start and stop when the user presses Stop; Panic (REQ-004) and Burn (REQ-017) MUST also end the meeting. While live, the control bar MUST show a recording indicator and the elapsed time. If starting or stopping fails, the error MUST be shown under the bar.
+- **REQ-018 (User-Controlled Meeting Capture)**: Audio capture MUST NOT start at launch or on summon. It MUST start only when the user presses Start and stop when the user presses Stop; Burn (REQ-017) MUST also end the meeting, and Panic (REQ-004) quits the app. While live, the control bar MUST show a recording indicator and the elapsed time. If starting or stopping fails, the error MUST be shown under the bar.
+- **REQ-021 (Screen Context)**: Answers MAY use the screen. The Ask box has a screen toggle (on by default), the options card has one (off by default; the Coding mode turns it on), and `Cmd + Enter` Assist always uses the screen. When a prompt uses the screen, the app MUST capture the frontmost window other than Sidekick while the prompt is built, silently (no crosshairs, no shutter sound, no mouse input), downscale it so its longest edge is at most 1280 px, and send it as JPEG. A typed or picked question MUST NOT capture the screen while its toggle is off. An answer that used the screen MUST show a "Viewed screen" label.
+- **REQ-022 (Threads, Assist and History)**: Follow-ups MUST keep the last six exchanges as context. `Cmd + Enter` Assist MUST answer from the screen and the transcript of the last 90 s or six turns, whichever is more, without taking keyboard focus; when the Ask box has typed text it MUST send that text instead. `Cmd + R` MUST start a new chat. History MUST list only this meeting's threads, kept in memory, and MUST be cleared on Stop, Burn and panic. Nothing MUST be written to disk.
 
 ### 3.2 Security Requirements
-- **SEC-001 (Credential Isolation)**: All third-party API keys (OpenRouter, Anthropic, OpenAI, Google, Groq, Deepgram) MUST be stored only in the local config file `~/.config/sidekick/config.json` (or `$XDG_CONFIG_HOME/sidekick/config.json` when `XDG_CONFIG_HOME` is an absolute path). The directory MUST be created with mode `0700` and the file MUST be written with mode `0600`, re-applied on every write. Keys MUST NOT be stored in browser `localStorage`, `.env` files, or the macOS Keychain. Keys are plain text on disk: any process running as the same macOS user can read them, and they are included in backups. The file MUST NOT be committed or shared.
+- **SEC-001 (Credential Isolation)**: All third-party API keys (OpenRouter, Anthropic, OpenAI, Groq) MUST be stored only in the local config file `~/.config/sidekick/config.json` (or `$XDG_CONFIG_HOME/sidekick/config.json` when `XDG_CONFIG_HOME` is an absolute path). The directory MUST be created with mode `0700` and the file MUST be written with mode `0600`, re-applied on every write. Keys MUST NOT be stored in browser `localStorage`, `.env` files, or the macOS Keychain. Keys are plain text on disk: any process running as the same macOS user can read them, and they are included in backups. The file MUST NOT be committed or shared. Keys saved for the removed Deepgram and Gemini providers MUST be dropped when the file is read.
 - **SEC-002 (Zero Telemetry)**: The application MUST NOT send telemetry, analytics, crash logs, or heartbeat packets to any first-party or third-party tracking services.
 - **SEC-003 (Local Ephemeral Processing)**: Audio PCM buffers MUST be processed in memory and discarded immediately following STT transcription. No raw audio files may be written to persistent storage.
 
@@ -115,14 +117,23 @@ fn set_hit_regions(rects: Vec<[f64; 4]>); // visible UI as [x, y, w, h] in windo
 fn set_window_opacity(alpha: f64) -> Result<(), String>;
 
 #[tauri::command]
-fn set_layout_mode(mode: LayoutMode) -> Result<(), String>;
+fn set_layout_mode(mode: String) -> Result<(), String>; // "floating-hud" or "dynamic-notch"
 
 #[tauri::command]
-fn trigger_panic() -> Result<(), String>;
+fn trigger_panic() -> Result<(), String>; // hides, wipes, deletes the session DB and quits the process; never returns
+
+#[tauri::command]
+fn hide_window() -> Result<(), String>; // hides and hands keyboard focus back (REQ-002)
+
+#[tauri::command]
+fn release_focus() -> Result<(), String>; // hands focus back to the previous app
+
+#[tauri::command]
+fn focus_for_typing() -> Result<(), String>; // makes Sidekick active so a text field can take keys
 
 // Screen & Audio Capture
 #[tauri::command]
-fn capture_active_window() -> Result<WindowCaptureResponse, String>;
+fn capture_active_window() -> Result<WindowCaptureResponse, String>; // frontmost window other than Sidekick, at most 1280 px JPEG
 
 #[tauri::command]
 async fn start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>; // only on user Start (REQ-018); off the main thread; idempotent
@@ -207,16 +218,13 @@ The evaluator gets the last 12 turns as `Interviewer: …` / `Candidate: …` li
 - **AC-002 (Panic Key Activation)**:
   - **Given** Sidekick is rendering live streamed code and transcribing audio,
   - **When** the user presses `Cmd + Esc`,
-  - **Then** all overlay windows MUST become completely hidden within 25ms, audio capture MUST halt, and in-flight HTTP streams MUST abort.
+  - **Then** all overlay windows MUST become completely hidden within 25ms, audio capture MUST halt, in-flight HTTP streams MUST abort, the session database MUST be deleted, and the process MUST quit.
 
-- **AC-003 (Frontmost Active Window Capture)**:
-  - **Given** a coding problem is open in Google Chrome or VS Code,
-  - **When** the user presses `Cmd + Shift + S`,
-  - **Then** Sidekick MUST capture the active window silently without camera sounds, crosshair overlays, or focus disruption, and forward the image to the configured Deep Engine.
+- **AC-003 (Frontmost Active Window Capture)**: Removed (16 Oct 2026). The `Cmd + Shift + S` shortcut no longer exists; see AC-008.
 
 - **AC-004 (Live Options Latency)**:
   - **Given** a live meeting with a Groq key set,
-  - **When** the interviewer finishes asking a question (1.1 s of silence ends the turn),
+  - **When** the interviewer finishes asking a question (0.8 s of silence ends the turn),
   - **Then** after transcription the question MUST appear in slot 1 marked "Asked" within about 1 s, with two likely next questions below it, and `Cmd + Option + 1` MUST start streaming its answer.
 
 - **AC-005 (Embedded STT Offline Execution)**:
@@ -234,6 +242,11 @@ The evaluator gets the last 12 turns as `Interviewer: …` / `Candidate: …` li
   - **When** the user has not pressed Start,
   - **Then** no audio MUST be captured; after Start the bar MUST show a recording indicator and timer, and after Stop, Panic or Burn capture MUST end.
 
+- **AC-008 (Screen Toggle)**:
+  - **Given** the Ask-box screen toggle is on (the default) and a window other than Sidekick is frontmost,
+  - **When** the user sends a typed question,
+  - **Then** that window MUST be captured silently, sent as a JPEG of at most 1280 px with the question, and the answer MUST show "Viewed screen". With the toggle off, nothing MUST be captured.
+
 ## 6. Test Automation Strategy
 
 ### 6.1 Test Levels & Frameworks
@@ -242,7 +255,7 @@ The evaluator gets the last 12 turns as `Interviewer: …` / `Candidate: …` li
   * *React Frontend*: Vitest + React Testing Library verifying state stores, progressive card expanders, and hotkey listeners.
 * **Integration Testing**:
   * *Tauri IPC*: Mocked IPC invocations verifying command routing and event emissions.
-  * *AI Dispatcher*: Provider integration tests with mock HTTP responses for OpenRouter, Anthropic, OpenAI, and Gemini.
+  * *AI Dispatcher*: Provider integration tests with mock HTTP responses for OpenRouter, Anthropic and OpenAI.
 * **End-to-End & Compliance Testing**:
   * *Invisibility Verification*: Automated QuickTime screen recording test script asserting pixel variance across captured frames to confirm 0% HUD leakage.
 
@@ -264,9 +277,9 @@ Electron bundles a complete Chromium browser and Node.js runtime, producing ~180
 ### 8.1 External Systems & APIs
 - **EXT-001 (OpenRouter API)**: Unified OpenAI-compatible endpoint for multi-model access (`https://openrouter.ai/api/v1`).
 - **EXT-002 (Anthropic Messages API)**: Native Claude endpoint supporting streaming and vision (`https://api.anthropic.com/v1/messages`).
-- **EXT-003 (OpenAI Chat API)**: Direct OpenAI endpoint for GPT-5 and o-series reasoning models (`https://api.openai.com/v1/chat/completions`).
-- **EXT-004 (Google Gemini API)**: Generative Language endpoint for Gemini Flash and Pro (`https://generativelanguage.googleapis.com/v1beta`).
-- **EXT-005 (Groq LPU Cloud)**: High-speed inference endpoint (`https://api.groq.com/openai/v1`) for live options, Whisper transcription (`whisper-large-v3-turbo`) and optional answers.
+- **EXT-003 (OpenAI Chat API)**: Direct OpenAI endpoint for GPT-6 Luna and GPT-6.1 Sol (`https://api.openai.com/v1/chat/completions`).
+- **EXT-004 (Google Gemini API)**: Removed (16 Oct 2026). Gemini answers were dropped.
+- **EXT-005 (Groq LPU Cloud)**: High-speed inference endpoint (`https://api.groq.com/openai/v1`) for live options (`qwen/qwen3.8-27b`) and optional Whisper transcription (`whisper-large-v3-turbo`). Groq answers were removed (16 Oct 2026).
 
 ### 8.2 Technology Platform Dependencies
 - **PLT-001 (macOS 13.0+ SDK)**: Required for `ScreenCaptureKit` driverless system audio capture.
@@ -302,7 +315,7 @@ pub fn configure_stealth_window(ns_window: id) {
 ```
 
 ### 9.2 Edge Cases
-* **Screen Recording Permission Denied**: If the user denies macOS Screen Recording permission, active window capture and SCK audio fail. The app MUST catch `SCStreamError` gracefully and present a discreet diagnostic banner guiding the user to macOS System Settings.
+* **Screen Recording Permission Denied**: If the user denies macOS Screen Recording permission, screen capture and SCK audio fail. The app MUST catch `SCStreamError` gracefully and present a discreet diagnostic banner guiding the user to macOS System Settings.
 * **Audio Device Disconnect**: If the user unplugs headphones mid-interview, `CoreAudio` stream listeners MUST automatically reconnect to the newly selected default output device within 500ms without crashing.
 * **Rapid Fire Questions**: If the interviewer asks multiple questions back-to-back without pausing, the VAD queue MUST aggregate turns and extract the primary query rather than spawning competing AI streams.
 

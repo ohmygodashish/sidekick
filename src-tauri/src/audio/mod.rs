@@ -3,10 +3,10 @@
 //! Dual-channel driverless audio capture, diarization, and Metal-accelerated transcription:
 //! - Channel 0 (Interviewer): System and meeting audio via macOS ScreenCaptureKit.
 //! - Channel 1 (Candidate): Local voice audio via default microphone (cpal / CoreAudio).
-//! - Dual-channel mixer: 16kHz mono resampling, energy-based VAD with 1.1s turn silence detection.
+//! - Dual-channel mixer: 16kHz mono resampling, energy-based VAD with 0.8s turn silence detection.
 //! - Ephemeral in-memory ring buffering with zero disk persistence (SEC-003).
 //! - Embedded Local Whisper engine (`whisper.rs`) with Apple Metal GPU acceleration (AC-005).
-//! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local`, `groq`, or `deepgram`.
+//! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local` or `groq`.
 //! - Asynchronous decoupled worker thread (`AsyncSttWorker`) ensuring ZERO audio callback thread blocking.
 //! - Sub-millisecond panic killswitch halt and buffer purge < 25ms (REQ-004).
 
@@ -41,6 +41,7 @@ pub use whisper::{
 pub const EVENT_AUDIO_TURN_COMPLETED: &str = "sidekick://audio_turn_completed";
 pub const EVENT_AUDIO_STATUS_CHANGED: &str = "sidekick://audio_status_changed";
 pub const EVENT_AUDIO_LEVEL: &str = "sidekick://audio_level";
+pub const EVENT_MIC_TEST_LEVEL: &str = "sidekick://mic_test_level";
 pub const EVENT_STT_MODEL_DOWNLOAD_PROGRESS: &str = "sidekick://stt_model_download_progress";
 pub const EVENT_STT_MODEL_DOWNLOAD_COMPLETED: &str = "sidekick://stt_model_download_completed";
 
@@ -51,7 +52,7 @@ pub struct AudioCaptureConfig {
     pub capture_interviewer: bool,
     /// Ingest candidate microphone (Channel 1: Candidate)
     pub capture_candidate: bool,
-    /// Turn silence threshold in seconds (default 1.1s, AC-004)
+    /// Turn silence threshold in seconds (default 0.8s, AC-004)
     pub vad_silence_secs: f32,
     /// Energy threshold for speech detection (default 0.015)
     pub vad_threshold: f32,
@@ -92,6 +93,12 @@ pub struct AudioState {
     sink_open: Arc<AtomicBool>,
     is_capturing: AtomicBool,
     is_panicked: Arc<AtomicBool>,
+    /// Microphone the user picked, by name; `None` is the system default
+    mic_device: Mutex<Option<String>>,
+    /// Running microphone test (mic only, no transcription)
+    mic_test: Mutex<Option<MicAudioCapture>>,
+    /// Closed before the test stream stops, so late buffers emit no level events
+    mic_test_open: Arc<AtomicBool>,
 }
 
 impl Default for AudioState {
@@ -117,6 +124,9 @@ impl AudioState {
             sink_open: Arc::new(AtomicBool::new(false)),
             is_capturing: AtomicBool::new(false),
             is_panicked,
+            mic_device: Mutex::new(None),
+            mic_test: Mutex::new(None),
+            mic_test_open: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -154,15 +164,17 @@ impl AudioState {
     }
 
     /// Starts audio capture on both channels according to configuration.
+    /// Returns plain-language warnings for any channel that did not start. Errs only when nothing started.
     /// Does nothing if capture is already running, so repeated starts never stack streams.
     pub fn start<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         config: AudioCaptureConfig,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        self.close_mic_test();
         if self.is_capturing.load(Ordering::SeqCst) {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // Reset panic state when explicitly starting audio capture
@@ -184,7 +196,7 @@ impl AudioState {
             *mixer_guard = AudioMixer::new(vad_config);
         }
 
-        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
 
         // 2. Channel 0: ScreenCaptureKit System Audio (Interviewer)
         if config.capture_interviewer {
@@ -195,7 +207,7 @@ impl AudioState {
                 }
                 Err(e) => {
                     eprintln!("[Sidekick Audio] ScreenCaptureKit startup warning: {e}");
-                    errors.push(format!("ScreenCaptureKit: {e}"));
+                    warnings.push(friendly_warning(Channel::Interviewer, &e));
                 }
             }
         } else {
@@ -205,16 +217,24 @@ impl AudioState {
             }
         }
 
-        // 3. Channel 1: Candidate Microphone Audio
+        // 3. Channel 1: Candidate Microphone Audio, from the chosen device when it is still connected
         if config.capture_candidate {
-            match MicAudioCapture::start(self.channel_sink(app.clone(), Channel::Candidate)) {
+            let chosen = self.mic_device.lock().map_err(|e| e.to_string())?.clone();
+            let device = match chosen {
+                Some(name) if !mic_audio::input_device_present(&name) => {
+                    warnings.push(format!("Microphone '{name}' wasn't found, so the default microphone is used."));
+                    None
+                }
+                other => other,
+            };
+            match MicAudioCapture::start(device.as_deref(), self.channel_sink(app.clone(), Channel::Candidate)) {
                 Ok(mic) => {
                     let mut guard = self.mic_stream.lock().map_err(|e| e.to_string())?;
                     *guard = Some(mic);
                 }
                 Err(e) => {
                     eprintln!("[Sidekick Audio] Microphone startup warning: {e}");
-                    errors.push(format!("Microphone: {e}"));
+                    warnings.push(friendly_warning(Channel::Candidate, &e));
                 }
             }
         } else {
@@ -241,16 +261,16 @@ impl AudioState {
                 "is_interviewer_capturing": snapshot.is_interviewer_capturing,
                 "is_candidate_capturing": snapshot.is_candidate_capturing,
                 "stt_engine": snapshot.stt_engine,
-                "warnings": errors,
+                "warnings": warnings,
             }),
         );
 
-        // If both failed and were requested, return an error
-        if !any_active && (!errors.is_empty()) {
-            return Err(format!("Failed to start audio ingestion: {}", errors.join("; ")));
+        // Nothing started: the warnings say what to fix. Otherwise the session runs and the HUD shows them.
+        if !any_active && !warnings.is_empty() {
+            return Err(warnings.join(" "));
         }
 
-        Ok(())
+        Ok(warnings)
     }
 
     /// Callback for one channel: meters its level, feeds the mixer, and queues finished turns for STT
@@ -308,6 +328,61 @@ impl AudioState {
         Ok(())
     }
 
+    /// Starts the microphone test: opens only the selected microphone and emits `EVENT_MIC_TEST_LEVEL`.
+    /// Does nothing if a test is already running.
+    pub fn start_mic_test<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        if self.is_capturing.load(Ordering::SeqCst) {
+            return Err("Stop listening before testing the microphone.".to_string());
+        }
+        if self.mic_test.lock().map_err(|e| e.to_string())?.is_some() {
+            return Ok(());
+        }
+
+        let name = self.mic_device.lock().map_err(|e| e.to_string())?.clone();
+        self.mic_test_open.store(true, Ordering::SeqCst);
+        let open = self.mic_test_open.clone();
+        let app = app.clone();
+        let meter = Mutex::new(mic_audio::MicLevelWindow::default());
+        let capture = MicAudioCapture::start(name.as_deref(), move |samples: &[f32], sample_rate: u32, channels: u16| {
+            if !open.load(Ordering::SeqCst) {
+                return;
+            }
+            let reading = meter.lock().ok().and_then(|mut m| m.push(samples, sample_rate, channels));
+            if let Some((db, peak_db)) = reading {
+                let _ = app.emit(EVENT_MIC_TEST_LEVEL, serde_json::json!({ "db": db, "peakDb": peak_db }));
+            }
+        })
+        .map_err(|e| {
+            self.mic_test_open.store(false, Ordering::SeqCst);
+            friendly_warning(Channel::Candidate, &e)
+        })?;
+
+        *self.mic_test.lock().map_err(|e| e.to_string())? = Some(capture);
+        // A purge that landed while the microphone was opening has already run, so the test must not outlive it
+        if !self.mic_test_open.load(Ordering::SeqCst) {
+            self.close_mic_test();
+        }
+        Ok(())
+    }
+
+    /// Stops the microphone test if one is running
+    pub fn stop_mic_test(&self) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        self.close_mic_test();
+        Ok(())
+    }
+
+    /// Stops the microphone test without taking `lifecycle`, so purge can call it. Stops are asynchronous,
+    /// which is why the emit gate closes first.
+    fn close_mic_test(&self) {
+        self.mic_test_open.store(false, Ordering::SeqCst);
+        let mic = self.mic_test.lock().ok().and_then(|mut g| g.take());
+        if let Some(mut mic) = mic {
+            mic.stop();
+        }
+    }
+
     /// Closes the sink, then stops both streams. Stops run outside the stream locks: the
     /// synchronous state query on the main thread also takes them.
     fn close_streams(&self) {
@@ -341,6 +416,7 @@ impl AudioState {
                 stream.stop();
             }
         }
+        self.close_mic_test();
 
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.purge();
@@ -353,11 +429,38 @@ impl AudioState {
     }
 }
 
+const SCREEN_RECORDING_HINT: &str = "Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Screen Recording, then restart Sidekick.";
+const MICROPHONE_HINT: &str = "Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Microphone, then restart Sidekick.";
+
+/// Plain-language startup warning for one channel, saying what the user can do next
+fn friendly_warning(channel: Channel, raw: &str) -> String {
+    match (channel, raw) {
+        (Channel::Interviewer, sck_audio::SCREEN_RECORDING_DENIED) => {
+            format!("System audio is off: Screen Recording isn't allowed. {SCREEN_RECORDING_HINT}")
+        }
+        (Channel::Interviewer, _) => format!("System audio is off: {raw}"),
+        (Channel::Candidate, mic_audio::MIC_ACCESS_DENIED) => {
+            format!("Microphone is off: access is denied or restricted. {MICROPHONE_HINT}")
+        }
+        (Channel::Candidate, _) => format!("Microphone is off: {raw}"),
+    }
+}
+
 fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, interviewer: f32, candidate: f32) {
     let _ = app.emit(
         EVENT_AUDIO_LEVEL,
         serde_json::json!({ "interviewer": interviewer, "candidate": candidate }),
     );
+}
+
+const ENGLISH_ONLY_MODEL_MESSAGE: &str =
+    "The on-device model only understands English. Switch to Groq for other languages.";
+
+/// Warns when the on-device model cannot transcribe the chosen language (`.en` models are English-only)
+fn english_only_model_warning(engine: SttEngineType, model_filename: &str, language: &str) -> Option<String> {
+    let english_only = model_filename.ends_with(".en.bin");
+    (engine == SttEngineType::WhisperLocal && english_only && language != "en")
+        .then(|| ENGLISH_ONLY_MODEL_MESSAGE.to_string())
 }
 
 pub mod commands {
@@ -366,12 +469,12 @@ pub mod commands {
     use tauri::State;
 
     /// Starts audio capture via ScreenCaptureKit (interviewer) and Microphone (candidate).
-    /// Async so the blocking ScreenCaptureKit start runs off the main thread.
+    /// Returns warnings for a partial start. Async so the blocking ScreenCaptureKit start runs off the main thread.
     #[tauri::command]
     pub async fn start_audio_capture(
         app: AppHandle,
         config: Option<AudioCaptureConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<AudioState>().start(&app, config.unwrap_or_default())
         })
@@ -455,6 +558,50 @@ pub mod commands {
 
         Ok(path.to_string_lossy().to_string())
     }
+
+    /// Lists connected microphones; the system default is marked `isDefault`. Async because CoreAudio
+    /// enumeration can stall on Bluetooth devices, so it runs off the main thread.
+    #[tauri::command]
+    pub async fn list_input_devices() -> Result<Vec<mic_audio::InputDevice>, String> {
+        tauri::async_runtime::spawn_blocking(mic_audio::list_input_devices)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Picks the microphone for the next start or mic test; `None` is the system default
+    #[tauri::command]
+    pub fn set_mic_device(state: State<'_, AudioState>, name: Option<String>) -> Result<(), String> {
+        let name = name.filter(|n| !n.trim().is_empty());
+        *state.mic_device.lock().map_err(|e| e.to_string())? = name;
+        Ok(())
+    }
+
+    /// Sets the transcription language ("auto" or an ISO-639-1 code). Returns a warning when the
+    /// selected engine may not transcribe that language.
+    #[tauri::command]
+    pub fn set_stt_language(state: State<'_, AudioState>, language: String) -> Result<Option<String>, String> {
+        state.dispatcher.set_language(&language)?;
+        let engine_type = state.dispatcher.get_engine();
+        let local = state.dispatcher.local_whisper();
+        let language = local.language();
+        Ok(english_only_model_warning(engine_type, &whisper::normalize_model_filename(&local.model_name()), &language))
+    }
+
+    /// Starts the microphone test (mic only, no transcription). Async so the blocking microphone start runs off the main thread.
+    #[tauri::command]
+    pub async fn start_mic_test(app: AppHandle) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || app.state::<AudioState>().start_mic_test(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Stops the microphone test
+    #[tauri::command]
+    pub async fn stop_mic_test(app: AppHandle) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || app.state::<AudioState>().stop_mic_test())
+            .await
+            .map_err(|e| e.to_string())?
+    }
 }
 
 #[cfg(test)]
@@ -466,7 +613,7 @@ mod tests {
         let config = AudioCaptureConfig::default();
         assert!(config.capture_interviewer);
         assert!(config.capture_candidate);
-        assert_eq!(config.vad_silence_secs, 1.1);
+        assert_eq!(config.vad_silence_secs, 0.8);
         assert_eq!(config.vad_threshold, 0.015);
     }
 
@@ -504,7 +651,52 @@ mod tests {
         state.dispatcher.set_engine("groq").unwrap();
         assert_eq!(state.snapshot().stt_engine, "groq");
 
-        state.dispatcher.set_engine("deepgram").unwrap();
-        assert_eq!(state.snapshot().stt_engine, "deepgram");
+        assert!(state.dispatcher.set_engine("deepgram").is_err());
+        assert_eq!(state.snapshot().stt_engine, "groq");
+    }
+
+    #[test]
+    fn test_friendly_warning_explains_denied_permissions() {
+        assert_eq!(
+            friendly_warning(Channel::Interviewer, sck_audio::SCREEN_RECORDING_DENIED),
+            "System audio is off: Screen Recording isn't allowed. Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Screen Recording, then restart Sidekick."
+        );
+        assert_eq!(
+            friendly_warning(Channel::Candidate, mic_audio::MIC_ACCESS_DENIED),
+            "Microphone is off: access is denied or restricted. Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Microphone, then restart Sidekick."
+        );
+    }
+
+    #[test]
+    fn test_friendly_warning_keeps_other_errors() {
+        assert_eq!(friendly_warning(Channel::Interviewer, "no display"), "System audio is off: no display");
+        assert_eq!(friendly_warning(Channel::Candidate, "no device"), "Microphone is off: no device");
+    }
+
+    #[test]
+    fn test_english_only_model_warning_rule() {
+        assert_eq!(
+            english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "hi").as_deref(),
+            Some("The on-device model only understands English. Switch to Groq for other languages.")
+        );
+        assert!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "auto").is_some());
+        assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "en"), None);
+        assert_eq!(english_only_model_warning(SttEngineType::Groq, "ggml-tiny.en.bin", "hi"), None);
+        assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-base.bin", "hi"), None);
+    }
+
+    #[test]
+    fn test_stop_mic_test_without_test_is_ok() {
+        let state = AudioState::default();
+        assert!(state.stop_mic_test().is_ok());
+        assert!(state.mic_test.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_mic_status_blocks_only_denied_or_restricted() {
+        assert!(!mic_audio::mic_status_blocks(0), "not determined must still open, so macOS can prompt");
+        assert!(mic_audio::mic_status_blocks(1), "restricted");
+        assert!(mic_audio::mic_status_blocks(2), "denied");
+        assert!(!mic_audio::mic_status_blocks(3), "authorized");
     }
 }

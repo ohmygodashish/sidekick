@@ -3,6 +3,7 @@ import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { useHitRegions } from "../../hooks/useHitRegions";
 import { usePresence } from "../../hooks/usePresence";
+import { cn } from "../../lib/utils";
 import { ControlBar } from "./ControlBar";
 import { CaptionLine } from "./CaptionLine";
 import { LiveOptions } from "./LiveOptions";
@@ -22,7 +23,7 @@ const StatusPill: React.FC<React.HTMLAttributes<HTMLParagraphElement> & { show: 
       {...props}
       data-state={presence.state}
       inert={presence.state === "closed"}
-      className={`sk-surface sk-pop rounded-full px-3 py-1.5 text-[12px] ${className ?? ""}`}
+      className={cn("sk-surface sk-pop rounded-full px-3 py-1.5 text-[12px]", className)}
     />
   );
 };
@@ -30,9 +31,11 @@ const StatusPill: React.FC<React.HTMLAttributes<HTMLParagraphElement> & { show: 
 export const HUDContainer: React.FC = () => {
   const layoutMode = useAppStore((state) => state.layoutMode);
   const meetingError = useAppStore((state) => state.meetingError);
-  // stopMeeting keeps the status "live" when stopping fails
-  const stopFailed = useAppStore((state) => state.meetingStatus === "live");
+  // The pill fades out after the error clears, so it keeps the last message while fading
+  const lastMeetingError = useRef<string | null>(null);
+  if (meetingError) lastMeetingError.current = meetingError;
   const isSettingsOpen = useSettingsStore((state) => state.isSettingsOpen);
+  const settings = usePresence(isSettingsOpen);
   const isClickThrough = useAppStore((state) => state.isClickThrough);
   const rootRef = useRef<HTMLDivElement>(null);
   useHitRegions(rootRef);
@@ -46,10 +49,8 @@ export const HUDContainer: React.FC = () => {
       <StatusPill show={isClickThrough} className="text-sk-warn">
         Click-through on · <kbd className="sk-kbd">⌘⇧C</kbd> to turn off
       </StatusPill>
-      <StatusPill show={Boolean(meetingError)} role="alert" title={meetingError ?? undefined} className="text-sk-danger">
-        {stopFailed
-          ? "Couldn't stop listening. Try again, or press ⌘Esc to stop everything."
-          : "Couldn't start listening. Check Microphone and Screen Recording access in System Settings."}
+      <StatusPill show={Boolean(meetingError)} role="alert" className="max-w-[560px] rounded-2xl text-center text-sk-danger">
+        {lastMeetingError.current}
       </StatusPill>
       {layoutMode !== "dynamic_notch" && (
         <>
@@ -60,8 +61,8 @@ export const HUDContainer: React.FC = () => {
         </>
       )}
       <div className="flex min-h-0 w-full max-w-[560px] flex-1 flex-col">
-        {isSettingsOpen ? (
-          <SettingsDrawer />
+        {settings.mounted ? (
+          <SettingsDrawer isOpen state={settings.state} />
         ) : layoutMode === "dynamic_notch" ? null : (
           <AnswerPanel />
         )}

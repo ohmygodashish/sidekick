@@ -66,9 +66,9 @@ pub fn run() {
         .with_shortcuts([
             hotkeys::SHORTCUT_PANIC,
             hotkeys::SHORTCUT_TOGGLE_VISIBILITY,
+            hotkeys::SHORTCUT_TOGGLE_MEETING,
             hotkeys::SHORTCUT_TOGGLE_CLICK_THROUGH,
             hotkeys::SHORTCUT_TOGGLE_LAYOUT_MODE,
-            hotkeys::SHORTCUT_CAPTURE_ACTIVE_WINDOW,
             hotkeys::SHORTCUT_PICK_OPTIONS[0],
             hotkeys::SHORTCUT_PICK_OPTIONS[1],
             hotkeys::SHORTCUT_PICK_OPTIONS[2],
@@ -81,11 +81,27 @@ pub fn run() {
         })
         .build();
 
-    tauri::Builder::default()
+    // Drops the activation requests tao and wry make while the window and web view are built
+    #[cfg(target_os = "macos")]
+    appkit::suppress_launch_activation();
+
+    let builder = tauri::Builder::default();
+    // Tauri activates the app at launch by default, which takes focus before the overlay is shown
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(false);
+
+    builder
         .manage(hotkeys::HotkeyState::default())
         .manage(audio::AudioState::default())
         .manage(hit_region::HitRegions::default())
         .plugin(hotkey_plugin)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(webview_window) = window.app_handle().get_webview_window(window.label()) {
+                    appkit::window::on_became_key(&webview_window);
+                }
+            }
+        })
         .setup(|app| {
             // Ensure local ephemeral session.db exists
             let _ = storage::db::open_session_db();
@@ -105,7 +121,12 @@ pub fn run() {
                 // 1. Configure headless phantom accessory policy (zero Dock icon, excluded from Cmd+Tab, zero tray)
                 appkit::configure_accessory_policy();
 
-                // 2. Configure stealth overlay on the main window (Task 2 cleanup: safe wrapper)
+                // 2. Showing and clicking the overlay never activate Sidekick (also in dev-visible mode)
+                if let Some(main_window) = app.get_webview_window("main") {
+                    appkit::configure_non_activating(&main_window)?;
+                }
+
+                // 3. Configure stealth overlay on the main window (Task 2 cleanup: safe wrapper)
                 if let Some(main_window) = app.get_webview_window("main") {
                     if !dev_visible {
                         appkit::configure_tauri_window(&main_window)?;
@@ -115,9 +136,14 @@ pub fn run() {
 
             if dev_visible {
                 if let Some(main_window) = app.get_webview_window("main") {
-                    main_window.show()?;
+                    appkit::show_without_activating(&main_window)?;
+                    hotkeys::set_visible_shortcuts(app.handle(), true);
                 }
             }
+
+            // Last step: focus_for_typing needs activation again, and all windows now exist
+            #[cfg(target_os = "macos")]
+            appkit::restore_activation();
 
             Ok(())
         })
@@ -125,6 +151,9 @@ pub fn run() {
             set_click_through,
             hit_region::set_hit_regions,
             trigger_panic,
+            hide_window,
+            release_focus,
+            focus_for_typing,
             set_window_opacity,
             set_layout_mode,
             get_hotkey_state,
@@ -141,6 +170,11 @@ pub fn run() {
             get_stt_engine,
             list_local_stt_models,
             download_stt_model,
+            list_input_devices,
+            set_mic_device,
+            set_stt_language,
+            start_mic_test,
+            stop_mic_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

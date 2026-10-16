@@ -1,4 +1,6 @@
-import { PersonalizationProfile, SeniorityPreset, TonePreset } from "../../store/settingsStore";
+import type { PersonalizationProfile, SeniorityPreset, SettingsState, TonePreset } from "../../store/settingsStore";
+import type { ProgressiveSolution } from "../../store/sessionStore";
+import { resolveMode } from "./modes";
 
 /**
  * Returns tailored prompt guidance based on seniority preset (REQ-016).
@@ -40,10 +42,21 @@ export function getTonePrompt(tone: TonePreset = "balanced"): string {
   }
 }
 
+export interface PromptOptions {
+  /** The active mode's instructions; empty or null for General */
+  modeInstructions?: string | null;
+  /** The language answers are written in; English or none adds nothing */
+  outputLanguage?: string;
+}
+
 /**
- * Builds the complete system prompt injecting candidate profile and formatting directives (REQ-014, REQ-015, REQ-016).
+ * The system prompt in two parts. `prefix` depends only on the profile, so it stays byte-stable across
+ * modes and languages (the provider cache keys on it); `suffix` holds the mode and language.
  */
-export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>): string {
+export function buildSystemPromptParts(
+  profile?: Partial<PersonalizationProfile>,
+  options: PromptOptions = {}
+): { prefix: string; suffix: string } {
   const seniorityText = getSeniorityPrompt(profile?.seniorityPreset);
   const toneText = getTonePrompt(profile?.tonePreset);
 
@@ -115,37 +128,98 @@ export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>): st
     "Do NOT output markdown code blocks wrapping the outer XML tags. Output the XML tags directly."
   );
 
-  return sections.join("\n");
+  const suffix: string[] = [];
+  const instructions = options.modeInstructions?.trim();
+  if (instructions) suffix.push("", "### MODE", instructions);
+  const language = options.outputLanguage?.trim();
+  if (language && language !== "English") {
+    suffix.push("", "### LANGUAGE", `Write every answer in ${language}. Keep the XML tag names, code and identifiers in English.`);
+  }
+
+  return { prefix: sections.join("\n"), suffix: suffix.join("\n") };
+}
+
+/** The complete system prompt: the profile and format rules, then the mode and language (REQ-014, REQ-015, REQ-016). */
+export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>, options?: PromptOptions): string {
+  const { prefix, suffix } = buildSystemPromptParts(profile, options);
+  return prefix + suffix;
+}
+
+/** The system prompt parts for the saved settings, exactly as a solve builds them. The warm-up uses this too, so they match. */
+export function currentSystemParts(
+  settings: Pick<SettingsState, "profile" | "activeModeId" | "modes" | "outputLanguage">
+): { prefix: string; suffix: string } {
+  return buildSystemPromptParts(settings.profile, {
+    modeInstructions: resolveMode(settings.activeModeId, settings.modes).instructions,
+    outputLanguage: settings.outputLanguage,
+  });
+}
+
+const MAX_HISTORY_EXCHANGES = 6;
+
+/** The Assist request: the model sees the screen and the conversation and says what to do now. */
+export const ASSIST_TASK =
+  "Given the screen and the conversation, what should the candidate say or do right now?";
+/** How an Assist answer is labelled in the thread. */
+export const ASSIST_LABEL = "Help with what's on my screen";
+
+export interface Exchange {
+  question: string;
+  answer: string;
+}
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/**
+ * Plain-text rendering of an answer for the follow-up history: summary, trade-offs, code,
+ * complexity and edge cases, each capped so a long answer can't crowd out the new question.
+ */
+export function solutionToText(solution: ProgressiveSolution): string {
+  const { stage1Intuition: s1, stage2Code: s2, stage3Analysis: s3 } = solution;
+  const lines: string[] = [];
+  if (s1?.verbalSummary) lines.push(clip(s1.verbalSummary, 600));
+  if (s1?.keyTradeoffs.length) {
+    lines.push("Trade-offs:", ...s1.keyTradeoffs.slice(0, 5).map((t) => `- ${clip(t, 200)}`));
+  }
+  if (s2?.code) lines.push(`Code (${s2.language || "text"}):`, clip(s2.code, 2000));
+  if (s2?.explanation) lines.push(clip(s2.explanation, 300));
+  if (s3?.timeComplexity || s3?.spaceComplexity) {
+    lines.push(`Complexity: time ${s3.timeComplexity || "unknown"}, space ${s3.spaceComplexity || "unknown"}`);
+  }
+  if (s3?.edgeCases.length) lines.push("Edge cases:", ...s3.edgeCases.slice(0, 5).map((e) => `- ${clip(e, 200)}`));
+  return lines.join("\n");
 }
 
 /**
- * Builds user prompt combining question, live pointers, transcript turns, and optional image context.
+ * Builds user prompt combining question, transcript turns, earlier exchanges of the thread
+ * (follow-ups), and optional image context.
  */
 export function buildUserPrompt(
   question: string,
   options?: {
-    quickPointers?: string[];
     transcript?: string;
     hasImage?: boolean;
+    history?: Exchange[];
   }
 ): string {
   const parts: string[] = [];
 
   if (options?.hasImage) {
+    parts.push("A screenshot of the user's current screen (their active window) is attached. Use it together with the question.");
+  }
+
+  const history = options?.history?.slice(-MAX_HISTORY_EXCHANGES) ?? [];
+  if (history.length > 0) {
+    const exchanges = history
+      .map((e) => `<exchange>\n<question>${e.question}</question>\n<answer>\n${e.answer}\n</answer>\n</exchange>`)
+      .join("\n");
     parts.push(
-      "A screenshot of the active coding problem / whiteboard window has been attached.",
-      "Analyze both the screenshot and the question text."
+      `<previous_exchanges>\n${exchanges}\n</previous_exchanges>`,
+      "The question below is a follow-up to the previous exchanges above. Answer it in that context."
     );
   }
 
   parts.push(`Question / Coding Task:\n"${question.trim()}"`);
-
-  if (options?.quickPointers && options.quickPointers.length > 0) {
-    parts.push(
-      "Initial Talking Points / Clues:",
-      options.quickPointers.map((p) => `- ${p}`).join("\n")
-    );
-  }
 
   if (options?.transcript?.trim()) {
     parts.push(`Recent conversation (speech-to-text):\n<transcript>\n${options.transcript.trim()}\n</transcript>`);

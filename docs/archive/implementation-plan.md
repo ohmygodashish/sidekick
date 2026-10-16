@@ -10,13 +10,15 @@ tags: [plan, implementation, tauri, rust, react, stealth, macos]
 
 # Sidekick Implementation Plan
 
+> **Superseded (17 Oct 2026).** This is the original build plan, kept as history; its body is not updated. For current behaviour (shortcuts, Settings layout, models, threads, panic), read [`cluely-parity-plan.md`](../cluely-parity-plan.md) and the [README](../../README.md).
+
 This document defines the phased, task-by-task engineering roadmap for building Sidekick. Each task is self-contained with explicit pre-conditions, detailed technical instructions, target files, acceptance criteria, and verification commands.
 
 ---
 
 ## 1. Global Constraints & Principles
 
-All tasks MUST adhere to the binding architectural requirements established in [`spec-architecture-sidekick-copilot.md`](./spec-architecture-sidekick-copilot.md):
+All tasks MUST adhere to the binding architectural requirements established in [`spec-architecture-sidekick-copilot.md`](../spec-architecture-sidekick-copilot.md):
 1. **Screen-Share Invisibility**: All overlay windows MUST be initialized with `NSWindowSharingNone` (`NSWindow.sharingType = .none`).
 2. **Accessory App Policy**: The process MUST run under `NSApplicationActivationPolicyAccessory` (zero Dock icon, excluded from `Cmd + Tab`).
 3. **Z-Index & Fullscreen Persistence**: Overlay MUST be assigned `NSWindow.Level.floating` and `NSWindowCollectionBehaviorFullScreenAuxiliary`.

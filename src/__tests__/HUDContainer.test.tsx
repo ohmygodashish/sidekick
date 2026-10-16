@@ -4,6 +4,7 @@ import { HUDContainer } from "../components/hud/HUDContainer";
 import { useAppStore } from "../store/appStore";
 import { useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
+import * as ipc from "../lib/ipc";
 
 vi.mock("../components/answer/AnswerPanel", () => ({
   AnswerPanel: () => <div data-testid="answer-panel" />,
@@ -12,14 +13,7 @@ vi.mock("../components/settings/SettingsDrawer", () => ({
   SettingsDrawer: () => <div data-testid="settings-drawer" />,
 }));
 
-const question = {
-  questionId: "q_test",
-  timestamp: Date.now(),
-  confidence: 0.99,
-  rawTranscript: "How does raft consensus work?",
-  extractedQuestion: "Explain the Raft consensus algorithm",
-  quickPointers: ["Leader election", "Log replication"],
-};
+const question = "Explain the Raft consensus algorithm";
 
 const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "More options" }));
 
@@ -47,22 +41,34 @@ describe("HUDContainer", () => {
     render(<HUDContainer />);
 
     expect(screen.getByRole("toolbar", { name: "Sidekick controls" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Start listening" })).toBeDefined();
     expect(screen.getByRole("button", { name: /Ask/ })).toBeDefined();
     expect(screen.getByRole("button", { name: /Hide/ })).toBeDefined();
     expect(screen.getByRole("button", { name: "More options" })).toBeDefined();
   });
 
+  it("Start and Stop show the listening shortcut, and Starting… does not", () => {
+    const shortcut = () => screen.getByRole("button", { name: /Start listening|Stop listening|Starting/ }).querySelector("kbd");
+    render(<HUDContainer />);
+    expect(shortcut()?.textContent).toBe("⇧⌘\\");
+
+    act(() => useAppStore.setState({ meetingStatus: "starting" }));
+    expect(shortcut()).toBeNull();
+
+    act(() => useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() }));
+    expect(shortcut()?.textContent).toBe("⇧⌘\\");
+  });
+
   it("Start goes live, and Stop returns to idle", async () => {
     render(<HUDContainer />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start meeting" }));
-    const stop = await screen.findByRole("button", { name: "Stop meeting" });
+    fireEvent.click(screen.getByRole("button", { name: "Start listening" }));
+    const stop = await screen.findByRole("button", { name: "Stop listening" });
     expect(stop.textContent).toContain("0:00");
 
     fireEvent.click(stop);
     await waitFor(() => expect(useAppStore.getState().meetingStatus).toBe("idle"));
-    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Start listening" })).toBeDefined();
   });
 
   it("live timer counts up every second and uses h:mm:ss after an hour", () => {
@@ -70,7 +76,7 @@ describe("HUDContainer", () => {
     useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() - 65_000 });
     render(<HUDContainer />);
 
-    const stop = () => screen.getByRole("button", { name: "Stop meeting" });
+    const stop = () => screen.getByRole("button", { name: "Stop listening" });
     expect(stop().textContent).toContain("1:05");
 
     act(() => vi.advanceTimersByTime(2000));
@@ -89,7 +95,7 @@ describe("HUDContainer", () => {
   });
 
   it("Ask opens the typed question even when a question is active, without solving", () => {
-    useSessionStore.getState().setActiveQuestion(question);
+    useSessionStore.getState().beginMessage({ question, kind: "typed", newThread: true });
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
 
@@ -111,7 +117,7 @@ describe("HUDContainer", () => {
     expect(screen.getByTestId("answer-panel")).toBeDefined();
   });
 
-  it("settings replace the answer panel, and Ask closes settings", () => {
+  it("settings replace the answer panel, and Ask closes settings", async () => {
     useSettingsStore.setState({ isSettingsOpen: true });
     render(<HUDContainer />);
     expect(screen.getByTestId("settings-drawer")).toBeDefined();
@@ -119,16 +125,42 @@ describe("HUDContainer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
     expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
-    expect(screen.getByTestId("answer-panel")).toBeDefined();
+    // Settings plays its exit first; the answer panel follows
+    expect(await screen.findByTestId("answer-panel")).toBeDefined();
   });
 
-  it("shows an alert when the meeting failed to start", () => {
-    useAppStore.setState({ meetingError: "Permission denied" });
+  it("shows the start error in an alert when the meeting failed to start", () => {
+    useAppStore.setState({ meetingError: "Microphone is off: access is denied. Turn it on in System Settings." });
     render(<HUDContainer />);
 
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("Couldn't start listening");
-    expect(alert.getAttribute("title")).toBe("Permission denied");
+    expect(alert.textContent).toContain("Microphone is off: access is denied.");
+    expect(alert.getAttribute("title")).toBeNull();
+  });
+
+  it("a partial start goes live and shows its warning", async () => {
+    const spy = vi
+      .spyOn(ipc, "invokeInTauri")
+      .mockResolvedValueOnce(["System audio is off: Screen Recording isn't allowed."]);
+    render(<HUDContainer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start listening" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("System audio is off: Screen Recording isn't allowed.");
+    expect(screen.getByRole("button", { name: "Stop listening" })).toBeDefined();
+    spy.mockRestore();
+  });
+
+  it("a failed stop stays live and shows the stop message", async () => {
+    useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() });
+    const spy = vi.spyOn(ipc, "invokeInTauri").mockRejectedValueOnce(new Error("lock poisoned"));
+    render(<HUDContainer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop listening" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't stop listening");
+    expect(useAppStore.getState().meetingStatus).toBe("live");
+    spy.mockRestore();
   });
 
   // The menu plays a short exit before unmounting, so "closed" is the trigger's state

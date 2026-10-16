@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import {
+  assistTurns,
   fetchLiveOptions,
   formatTranscript,
   liveOptionsErrorMessage,
+  modeLine,
   sanitizeOptions,
 } from "../services/ai/liveOptions";
 import { ProviderHttpError } from "../services/ai/errors";
@@ -26,7 +28,7 @@ function groqResponse(content: string, status = 200): Response {
 }
 
 const setGroqKey = (groq: string) =>
-  useSettingsStore.setState((s) => ({ apiKeys: { ...s.apiKeys, groq }, evaluatorModel: "groq/qwen/qwen3.8-27b" }));
+  useSettingsStore.setState((s) => ({ apiKeys: { ...s.apiKeys, groq } }));
 
 function HookHost() {
   useLiveOptions();
@@ -42,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -85,7 +88,7 @@ describe("live options service", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("bad key", { status: 401 }));
     const err = await fetchLiveOptions([turn("interviewer", "Hi")], { apiKey: "gsk-bad" }).catch((e) => e);
     expect(err).toBeInstanceOf(ProviderHttpError);
-    expect(liveOptionsErrorMessage(err)).toBe("Groq rejected the API key. Check it in Settings → Keys.");
+    expect(liveOptionsErrorMessage(err)).toBe("Groq rejected the API key. Check it in Settings → General.");
     expect(liveOptionsErrorMessage(new Error("boom"))).toBe("Live options are unavailable right now.");
   });
 
@@ -94,6 +97,27 @@ describe("live options service", () => {
     const lines = formatTranscript(turns).split("\n");
     expect(lines).toHaveLength(12);
     expect(lines[0]).toBe("Candidate: line 3");
+  });
+
+  it("Assist uses the last 90 seconds or the last six turns, whichever is more", () => {
+    const now = 1_000_000;
+    const at = (secondsAgo: number, text: string): TranscriptTurn => ({
+      id: text,
+      speaker: "interviewer",
+      text,
+      timestamp: now - secondsAgo * 1000,
+    });
+
+    // Two turns in the last 90 s, but six turns in all: the six win
+    const spread = [at(600, "a"), at(500, "b"), at(400, "c"), at(300, "d"), at(60, "e"), at(30, "f")];
+    expect(assistTurns(spread, now).map((t) => t.text)).toEqual(["a", "b", "c", "d", "e", "f"]);
+
+    // Nine turns in the last 90 s beat the last six
+    const busy = Array.from({ length: 9 }, (_, i) => at(80 - i * 8, `t${i}`));
+    expect(assistTurns(busy, now).map((t) => t.text)).toEqual(busy.map((t) => t.text));
+
+    // Fewer than six turns: all of them
+    expect(assistTurns([at(10, "only")], now).map((t) => t.text)).toEqual(["only"]);
   });
 });
 
@@ -172,8 +196,7 @@ describe("useLiveOptions", () => {
     window.removeEventListener("sidekick:deep_solve", listener);
     expect(listener).toHaveBeenCalledTimes(1);
     const detail = (listener.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail.extractedQuestion).toBe("Dijkstra?");
-    expect(detail.rawTranscript).toBe("Interviewer: We use graphs.");
+    expect(detail).toMatchObject({ question: "Dijkstra?", kind: "option", newThread: true, captureWindow: false });
     expect(useSessionStore.getState().pickedOption).toBe("Dijkstra?");
     expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
     expect(useAppStore.getState().layoutMode).toBe("floating_hud");
@@ -206,12 +229,29 @@ describe("LiveOptions and CaptionLine", () => {
     fireEvent.click(screen.getByRole("button", { name: /BFS vs DFS/ }));
 
     window.removeEventListener("sidekick:deep_solve", listener);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail.extractedQuestion).toBe("BFS vs DFS?");
+    expect((listener.mock.calls[0][0] as CustomEvent).detail.question).toBe("BFS vs DFS?");
+  });
+
+  it("cross-fades a changed option: the old text stays aria-hidden until the fade ends", () => {
+    vi.useFakeTimers();
+    setGroqKey("gsk-test");
+    useSessionStore.setState({ askedQuestion: "How do you detect a cycle?", likelyQuestions: ["BFS vs DFS?"] });
+    render(<LiveOptions />);
+
+    act(() => useSessionStore.setState({ likelyQuestions: ["Topological sort?"] }));
+    expect(screen.getByText("BFS vs DFS?").getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByText("Topological sort?").getAttribute("aria-hidden")).toBeNull();
+    expect(screen.getByRole("button", { name: /Topological sort/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /BFS/ })).toBeNull();
+
+    act(() => vi.advanceTimersByTime(120));
+    expect(screen.queryByText("BFS vs DFS?")).toBeNull();
+    expect(screen.getByText("Topological sort?")).toBeDefined();
   });
 
   it("explains what's missing when there are no options yet", () => {
     const { rerender } = render(<LiveOptions />);
-    expect(screen.getByText("Add a Groq key in Settings → Keys to see likely questions.")).toBeDefined();
+    expect(screen.getByText("Add a Groq key in Settings → General to see likely questions.")).toBeDefined();
     setGroqKey("gsk-test");
     rerender(<LiveOptions />);
     expect(screen.getByText("Questions appear here as the conversation goes.")).toBeDefined();
@@ -234,5 +274,52 @@ describe("LiveOptions and CaptionLine", () => {
     rerender(<CaptionLine />);
     expect(screen.getByText("Groq rejected the API key.")).toBeDefined();
     expect(screen.getByText("System")).toBeDefined();
+  });
+});
+
+describe("live options and the active mode", () => {
+  it("names the active mode and its description in the Groq system prompt, keeping the JSON contract", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": ["Tell me about a conflict."]}'));
+
+    await fetchLiveOptions([turn("interviewer", "Walk me through a hard project.")], {
+      apiKey: "gsk-test",
+      mode: {
+        id: "behavioral",
+        name: "Behavioral",
+        description: "STAR stories: a spoken first-person answer and four talking points.",
+      },
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const system: string = body.messages[0].content;
+    expect(system).toContain("Active mode: Behavioral. STAR stories: a spoken first-person answer and four talking points.");
+    expect(system).toContain('{"asked": string | null, "likely": string[]}');
+    expect(body.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("adds no mode line for General, so its Groq prompt is the plain one", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": []}'));
+
+    await fetchLiveOptions([turn("interviewer", "We use graphs a lot.")], {
+      apiKey: "gsk-test",
+      mode: { id: "general", name: "General", description: "Answers any question." },
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.messages[0].content).not.toContain("Active mode");
+    expect(modeLine({ id: "general", name: "General", description: "Answers any question." })).toBe("");
+  });
+
+  it("the hook sends the mode picked in settings", async () => {
+    setGroqKey("gsk-test");
+    useSettingsStore.setState({ activeModeId: "system_design" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(groqResponse('{"asked": null, "likely": []}'));
+    render(<HookHost />);
+
+    await act(async () => useSessionStore.getState().addTranscriptTurn(turn("interviewer", "How would you scale this?")));
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.messages[0].content).toContain("Active mode: System Design.");
+    useSettingsStore.setState({ activeModeId: "general" });
   });
 });

@@ -1,241 +1,198 @@
 import { useCallback, useRef, useEffect } from "react";
-import { useSessionStore, DetectedQuestion, ProgressiveSolution } from "../store/sessionStore";
-import { useSettingsStore, ApiProvider } from "../store/settingsStore";
+import { useSessionStore, MessageKind, MessagePatch, SolveRequest } from "../store/sessionStore";
+import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import { captureActiveWindow } from "../lib/ipc";
-import { buildSystemPrompt, buildUserPrompt } from "../services/ai/promptTemplates";
-import { dispatchDeepSolve, getDefaultModelForProvider } from "../services/ai/dispatcher";
+import {
+  ASSIST_LABEL,
+  ASSIST_TASK,
+  Exchange,
+  buildUserPrompt,
+  currentSystemParts,
+  solutionToText,
+} from "../services/ai/promptTemplates";
+import { dispatchDeepSolve, mimeTypeOfDataUrl, reasoningFor } from "../services/ai/dispatcher";
+import { assistTurns, formatTranscript, formatTurns } from "../services/ai/liveOptions";
+import { activeModel } from "../services/ai/models";
+import { initPrefetch, takePrefetch } from "./prefetch";
 
-export interface SolveOptions {
-  captureWindow?: boolean;
-  provider?: ApiProvider;
-  model?: string;
+type SolveOptions = Omit<SolveRequest, "question">;
+
+/** The solve that is running now, and the message it streams into. */
+interface InFlight {
+  controller: AbortController;
+  threadId: string;
+  messageId: string;
 }
 
-export interface UseDeepSolverOptions {
-  onStart?: (question: DetectedQuestion | string) => void;
-  onProgress?: (solution: ProgressiveSolution) => void;
-  onComplete?: (solution: ProgressiveSolution) => void;
-  onError?: (err: Error) => void;
-  onCancel?: () => void;
-  enabled?: boolean;
+const setSolving = (solvingMessageId: string | null) => useSessionStore.setState({ solvingMessageId });
+
+/** Only Assist and option picks send the conversation; a typed question is sent as written. */
+function transcriptFor(kind: MessageKind): string {
+  const turns = useSessionStore.getState().transcript;
+  if (kind === "option") return formatTranscript(turns);
+  if (kind === "assist") return formatTurns(assistTurns(turns));
+  return "";
 }
 
-// Solve status lives in sessionStore so any component can render it.
-const setIsSolving = (isSolving: boolean) => useSessionStore.setState({ isSolving });
-const setStreamingStage = (streamingStage: 1 | 2 | 3 | null) =>
-  useSessionStore.setState({ streamingStage });
-const setError = (solveError: string | null) => useSessionStore.setState({ solveError });
-
-export function useDeepSolver(options?: UseDeepSolverOptions) {
-  const { onStart, onProgress, onComplete, onError, onCancel, enabled = true } =
-    options || {};
-
-  const isSolving = useSessionStore((s) => s.isSolving);
-  const streamingStage = useSessionStore((s) => s.streamingStage);
-  const error = useSessionStore((s) => s.solveError);
-
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const isSolvingRef = useRef(false);
+/**
+ * Answers the solve requests from requestSolve(): adds the question to a thread and streams the answer
+ * into that message (REQ-014, REQ-015). Mounted once in App.
+ */
+export function useDeepSolver() {
+  const inFlightRef = useRef<InFlight | null>(null);
   const lastSolveTimeRef = useRef<number>(0);
   const lastSolveTextRef = useRef<string>("");
 
   /**
-   * Synchronously cancels in-flight fetch streams (< 25ms, REQ-004 / AC-002).
+   * Stops the running solve synchronously (< 25ms, REQ-004 / AC-002). Its message is removed if nothing
+   * was answered yet, or marked as stopped if it has a partial answer.
    */
   const cancelSolve = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    isSolvingRef.current = false;
-    setIsSolving(false);
-    setStreamingStage(null);
-    onCancel?.();
-  }, [onCancel]);
+    const inFlight = inFlightRef.current;
+    if (!inFlight) return;
+    inFlightRef.current = null;
+    inFlight.controller.abort();
+    useSessionStore.getState().stopMessage(inFlight.threadId, inFlight.messageId);
+    setSolving(null);
+  }, []);
 
-  /**
-   * Executes deep solve pipeline with vision capture and progressive streaming (REQ-014, REQ-015).
-   */
   const solveQuestion = useCallback(
-    async (
-      questionInput?: DetectedQuestion | string | null,
-      solveOptions?: SolveOptions
-    ) => {
+    async (question: string, solveOptions?: SolveOptions) => {
       // Abort immediately if system is in panicked stealth state
       if (useAppStore.getState().isPanicked) {
         cancelSolve();
         return;
       }
 
-      // Resolve question object and text
-      let questionObj: DetectedQuestion | null = null;
-      let questionText = "";
-      let quickPointers: string[] = [];
-
-      if (!questionInput) {
-        questionObj = useSessionStore.getState().activeQuestion;
-        if (!questionObj) {
-          return;
-        }
-        questionText = questionObj.extractedQuestion || questionObj.rawTranscript;
-        quickPointers = questionObj.quickPointers || [];
-      } else if (typeof questionInput === "string") {
-        questionText = questionInput.trim();
-        questionObj = {
-          questionId: `q_${Date.now()}`,
-          timestamp: Date.now(),
-          confidence: 1.0,
-          rawTranscript: questionText,
-          extractedQuestion: questionText,
-          quickPointers: [],
-        };
-      } else {
-        questionObj = questionInput;
-        questionText = questionObj.extractedQuestion || questionObj.rawTranscript;
-        quickPointers = questionObj.quickPointers || [];
-      }
-
+      const questionText = question.trim();
       if (!questionText) return;
- 
+
       // 500ms duplicate solve guard
       const now = Date.now();
-      if (
-        questionText === lastSolveTextRef.current &&
-        now - lastSolveTimeRef.current < 500
-      ) {
+      if (questionText === lastSolveTextRef.current && now - lastSolveTimeRef.current < 500) {
         return;
       }
       lastSolveTimeRef.current = now;
       lastSolveTextRef.current = questionText;
 
-      // Cancel the previous stream only after the duplicate guard, so a repeat trigger can't kill it
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      // A new solve supersedes the running one, which stops where it is
+      cancelSolve();
+
+      const kind: MessageKind = solveOptions?.kind ?? "typed";
+      // A pick takes the prefetched answer to its question, when the screen is off for it. A retry reruns in place
+      const prefetch =
+        kind === "option" && !solveOptions?.retryMessageId && !useSessionStore.getState().optionsUseScreen
+          ? takePrefetch(questionText)
+          : null;
+
+      const begun = useSessionStore.getState().beginMessage({
+        question: kind === "assist" ? ASSIST_LABEL : questionText,
+        kind,
+        newThread: solveOptions?.newThread ?? false,
+        retryMessageId: solveOptions?.retryMessageId,
+      });
+      if (!begun) return;
+      const { threadId, messageId } = begun;
+      const updateMessage = (patch: MessagePatch) =>
+        useSessionStore.getState().updateMessage(threadId, messageId, patch);
+
+      // A finished prefetch is the answer already: no request
+      if (prefetch?.status === "done") {
+        updateMessage({ solution: prefetch.solution });
+        return;
       }
-      // Don't leave the previous answer on screen under the new question
-      useSessionStore.getState().setSolution(null);
 
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      isSolvingRef.current = true;
-      setIsSolving(true);
-      setError(null);
-      setStreamingStage(1);
-
-      onStart?.(questionObj || questionText);
+      // An adopted prefetch is the in-flight solve from here on, so the abort paths below stop it too
+      const controller = prefetch?.controller ?? new AbortController();
+      inFlightRef.current = { controller, threadId, messageId };
+      setSolving(messageId);
 
       try {
-        // 1. Silent Active Window Capture (REQ-013, AC-003)
-        let imageBase64: string | undefined;
-        const shouldCapture = solveOptions?.captureWindow ?? true;
-
-        if (shouldCapture) {
-          try {
-            const capture = await captureActiveWindow();
-            if (capture?.base64_image) {
-              imageBase64 = capture.base64_image;
-            }
-          } catch {
-            // Silently proceed without screenshot if capture unavailable
-          }
+        if (prefetch) {
+          // Still running: it streams into this message from wherever it has got to
+          prefetch.onUpdate = (solution) => updateMessage({ solution });
+          if (prefetch.solution) updateMessage({ solution: prefetch.solution });
+          const solution = await prefetch.finished;
+          if (!controller.signal.aborted) updateMessage({ solution });
+          return;
         }
 
-        // Check if aborted during capture
-        if (controller.signal.aborted) return;
+        // 1. Silent active window capture (REQ-013, AC-003), started first. A failed capture just means no
+        //    screenshot; the prompt parts below are built while it runs
+        const shouldCapture = solveOptions?.captureWindow ?? true;
+        const capture = shouldCapture ? captureActiveWindow().catch(() => null) : Promise.resolve(null);
 
         // 2. Resolve settings and configuration
         const settings = useSettingsStore.getState();
-        const provider = solveOptions?.provider || settings.selectedProvider || "openrouter";
+        const provider = settings.selectedProvider || "openrouter";
         const apiKey = settings.apiKeys[provider] || "";
-        const model =
-          solveOptions?.model || settings.selectedModel || getDefaultModelForProvider(provider);
-        const profile = settings.profile;
+        const model = activeModel(settings);
 
-        // 3. Assemble personalized prompts (REQ-016)
-        const systemPrompt = buildSystemPrompt(profile);
-        const prompt = buildUserPrompt(questionText, {
-          quickPointers,
-          transcript: questionObj?.rawTranscript,
+        // 3. Assemble personalized prompts (REQ-016); earlier answers of the thread are the follow-up context
+        const { prefix: systemPrefix, suffix: systemSuffix } = currentSystemParts(settings);
+        const history: Exchange[] = begun.before.flatMap((m) =>
+          m.solution ? [{ question: m.question, answer: solutionToText(m.solution) }] : []
+        );
+        const transcript = transcriptFor(kind);
+
+        const imageBase64 = (await capture)?.base64_image || undefined;
+        if (controller.signal.aborted) return;
+        updateMessage({ viewedScreen: Boolean(imageBase64) });
+
+        const prompt = buildUserPrompt(kind === "assist" ? ASSIST_TASK : questionText, {
+          transcript,
           hasImage: Boolean(imageBase64),
+          history,
         });
 
-        // 4. Dispatch with progressive update handler
+        // 4. Dispatch; each progressive update streams into the message
         const finalSolution = await dispatchDeepSolve({
           provider,
           apiKey,
           model,
           prompt,
-          systemPrompt,
+          systemPrefix,
+          systemSuffix,
+          reasoning: reasoningFor(kind, settings),
           imageBase64,
-          questionId: questionObj?.questionId,
+          imageMimeType: imageBase64 ? mimeTypeOfDataUrl(imageBase64) : undefined,
+          questionId: messageId,
           signal: controller.signal,
           onProgressiveUpdate: (progressiveUpdate) => {
             if (controller.signal.aborted) return;
-
-            // Stream update into sessionStore for UI rendering
-            useSessionStore.getState().setSolution(progressiveUpdate);
-
-            // Compute active streaming stage indicator
-            if (progressiveUpdate.stage3Analysis) {
-              setStreamingStage(3);
-            } else if (progressiveUpdate.stage2Code) {
-              setStreamingStage(2);
-            } else if (progressiveUpdate.stage1Intuition) {
-              setStreamingStage(1);
-            }
-
-            onProgress?.(progressiveUpdate);
+            updateMessage({ solution: progressiveUpdate });
           },
         });
 
         if (controller.signal.aborted) return;
-
-        // Store final parsed solution
-        useSessionStore.getState().setSolution(finalSolution);
-        onComplete?.(finalSolution);
+        updateMessage({ solution: finalSolution });
       } catch (err: any) {
-        if (controller.signal.aborted || err.name === "AbortError") {
-          return;
-        }
-        const errMsg = err?.message || "Failed to solve problem";
-        setError(errMsg);
-        onError?.(err);
+        if (controller.signal.aborted || err.name === "AbortError") return;
+        updateMessage({ error: err?.message || "Failed to solve problem" });
       } finally {
-        // A superseded solve must not reset the state of the solve that replaced it
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-          isSolvingRef.current = false;
-          setIsSolving(false);
-          setStreamingStage(null);
+        // Only the solve that is still running clears its state
+        if (inFlightRef.current?.controller === controller) {
+          inFlightRef.current = null;
+          setSolving(null);
         }
       }
     },
-    [cancelSolve, onStart, onProgress, onComplete, onError]
+    [cancelSolve]
   );
 
   // Synchronous Panic Killswitch Watcher (< 25ms, REQ-004, AC-002)
   useEffect(() => {
-    const unsubscribePanicStore = useAppStore.subscribe((state) => {
-      if (state.isPanicked && isSolvingRef.current) {
-        cancelSolve();
-      }
+    return useAppStore.subscribe((state) => {
+      if (state.isPanicked) cancelSolve();
     });
-
-    return () => {
-      unsubscribePanicStore();
-    };
   }, [cancelSolve]);
 
   // Listen for Tauri sidekick://panic event
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     import("@tauri-apps/api/event")
-      .then(({ listen }) => {
-        return listen("sidekick://panic", () => {
-          cancelSolve();
-        });
-      })
+      .then(({ listen }) => listen("sidekick://panic", () => cancelSolve()))
       .then((unsub) => {
         unlisten = unsub;
       })
@@ -246,42 +203,26 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
     };
   }, [cancelSolve]);
 
-  // Listen for deep solve triggers dispatched as window events
+  // Solve requests (requestSolve) and cancels arrive as window events
   useEffect(() => {
-    if (!enabled) return;
-
     const handleWindowDeepSolve = (e: Event) => {
-      const customEvent = e as CustomEvent<DetectedQuestion | undefined>;
-      solveQuestion(customEvent.detail);
+      const request = (e as CustomEvent<SolveRequest | undefined>).detail;
+      if (request) solveQuestion(request.question, request);
     };
 
     // Closing the answer panel cancels the stream so the answer doesn't reappear later
-    const handleWindowCancel = () => cancelSolve();
-
     window.addEventListener("sidekick:deep_solve", handleWindowDeepSolve);
-    window.addEventListener("sidekick:cancel_solve", handleWindowCancel);
+    window.addEventListener("sidekick:cancel_solve", cancelSolve);
 
     return () => {
       window.removeEventListener("sidekick:deep_solve", handleWindowDeepSolve);
-      window.removeEventListener("sidekick:cancel_solve", handleWindowCancel);
+      window.removeEventListener("sidekick:cancel_solve", cancelSolve);
     };
-  }, [enabled, solveQuestion, cancelSolve]);
+  }, [solveQuestion, cancelSolve]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-    };
-  }, []);
+  // Unmount: stop whatever is still streaming
+  useEffect(() => cancelSolve, [cancelSolve]);
 
-  return {
-    solveQuestion,
-    cancelSolve,
-    isSolving,
-    streamingStage,
-    error,
-  };
+  // The slot-1 prefetch follows the asked question (hooks/prefetch.ts)
+  useEffect(() => initPrefetch(), []);
 }

@@ -29,12 +29,8 @@ describe("App", () => {
     expect(screen.getByTestId("app-root").style.opacity).toBe("0.75");
   });
 
-  it("toggles settings when pressing Cmd + ,", () => {
+  it("leaves Cmd + , to the global shortcut, so the window does not toggle settings twice", () => {
     render(<App />);
-    expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
-
-    fireEvent.keyDown(window, { key: ",", metaKey: true });
-    expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
 
     fireEvent.keyDown(window, { key: ",", metaKey: true });
     expect(useSettingsStore.getState().isSettingsOpen).toBe(false);

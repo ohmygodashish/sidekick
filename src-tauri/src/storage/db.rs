@@ -314,6 +314,23 @@ pub fn burn_session_at(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Panic: deletes the session database files and leaves nothing behind (the app quits next;
+/// setup recreates the schema on the next launch).
+pub fn delete_session_db() {
+    delete_session_db_at(&get_db_path());
+}
+
+/// Deletes the session database file and its WAL/SHM siblings at a specific path.
+pub fn delete_session_db_at(path: &Path) {
+    for file in [
+        path.to_path_buf(),
+        PathBuf::from(format!("{}-wal", path.display())),
+        PathBuf::from(format!("{}-shm", path.display())),
+    ] {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +487,22 @@ mod tests {
         assert_eq!((t, q, s), (0, 0, 0));
 
         let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_delete_session_db_removes_db_wal_and_shm() {
+        let db_path = temp_test_db("test_delete_session");
+        let _ = init_db(&db_path).expect("init db");
+        let wal_path = PathBuf::from(format!("{}-wal", db_path.display()));
+        let shm_path = PathBuf::from(format!("{}-shm", db_path.display()));
+        std::fs::write(&wal_path, b"").expect("create wal sibling");
+        std::fs::write(&shm_path, b"").expect("create shm sibling");
+
+        delete_session_db_at(&db_path);
+
+        assert!(!db_path.exists(), "session db must be gone");
+        assert!(!wal_path.exists(), "wal sibling must be gone");
+        assert!(!shm_path.exists(), "shm sibling must be gone");
     }
 
     #[test]

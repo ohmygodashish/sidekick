@@ -20,7 +20,7 @@ use cocoa::appkit::{
 /// 2. Excludes the application completely from the `Cmd + Tab` application switcher.
 /// 3. Ensures 100% headless phantom operation with NO Menu Bar / Status Bar / System Tray icon.
 ///
-/// Sidekick is summoned exclusively via global hotkeys (e.g. `Cmd + Shift + Space`),
+/// Sidekick is summoned exclusively via global hotkeys (e.g. `Cmd + \`),
 /// and settings are accessible only from within the summoned overlay UI.
 pub fn configure_accessory_policy() {
     #[cfg(target_os = "macos")]

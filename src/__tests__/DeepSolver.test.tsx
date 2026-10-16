@@ -5,6 +5,7 @@ import {
   getTonePrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  solutionToText,
 } from "../services/ai/promptTemplates";
 import {
   buildAnthropicPayload,
@@ -20,20 +21,15 @@ import {
   cleanBase64Data,
 } from "../services/ai/openrouter";
 import {
-  buildGeminiPayload,
-  getGeminiModel,
-  streamGemini,
-} from "../services/ai/gemini";
-import {
   parseProgressiveStream,
   readSSEStream,
 } from "../services/ai/streamParser";
-import { dispatchDeepSolve, getDefaultModelForProvider } from "../services/ai/dispatcher";
 import { useDeepSolver } from "../hooks/useDeepSolver";
-import { useSessionStore } from "../store/sessionStore";
+import { useSessionStore, activeThreadOf, requestSolve, STOPPED_MESSAGE, ThreadMessage } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import * as ipcModule from "../lib/ipc";
+import { mimeTypeOfDataUrl } from "../services/ai/dispatcher";
 
 const SOLUTION_XML = `<stage_1_intuition>
 <verbal_summary>Use a hash map for a single pass.</verbal_summary>
@@ -62,43 +58,66 @@ function useOpenRouterKey() {
   }));
 }
 
-// Test component to exercise useDeepSolver React hook
-function TestDeepSolverComponent({
-  onStart,
-  onProgress,
-  onComplete,
-  onError,
-}: {
-  onStart?: () => void;
-  onProgress?: () => void;
-  onComplete?: () => void;
-  onError?: (err: Error) => void;
-}) {
-  const { solveQuestion, cancelSolve, isSolving, streamingStage, error } =
-    useDeepSolver({
-      onStart,
-      onProgress,
-      onComplete,
-      onError,
-    });
+// The solve requests come from requestSolve (the Ask box, options and Assist use the same path)
+function TestDeepSolverComponent() {
+  useDeepSolver();
 
   return (
     <div>
-      <div data-testid="is-solving">{String(isSolving)}</div>
-      <div data-testid="streaming-stage">{String(streamingStage)}</div>
-      <div data-testid="error-message">{error || "none"}</div>
       <button
         data-testid="solve-btn"
-        onClick={() => solveQuestion("How would you design a distributed cache?")}
+        onClick={() => requestSolve({ question: "How would you design a distributed cache?" })}
       >
         Solve
       </button>
-      <button data-testid="cancel-btn" onClick={() => cancelSolve()}>
+      <button data-testid="cancel-btn" onClick={() => window.dispatchEvent(new Event("sidekick:cancel_solve"))}>
         Cancel
       </button>
     </div>
   );
 }
+
+// The first line of SOLUTION_XML, so the rest of the answer can be streamed after it
+const SUMMARY_TAG = "<stage_1_intuition>\n<verbal_summary>Use a hash map for a single pass.</verbal_summary>";
+const REST_OF_SOLUTION = SOLUTION_XML.slice(SUMMARY_TAG.length);
+
+/**
+ * A provider stream the test feeds by hand. Aborting the request errors the stream, as a browser does,
+ * so a superseded or cancelled answer stops reading.
+ */
+function controlledFetch() {
+  const encoder = new TextEncoder();
+  const streams: { push: (content: string) => void; finish: () => void }[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => (controller = c) });
+    init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+    streams.push({
+      push: (content) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)),
+      finish: () => {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200 }));
+  });
+  return streams;
+}
+
+// The newest message of the active thread: where the solver streams its answer
+const lastMessage = (): ThreadMessage => {
+  const messages = activeThreadOf(useSessionStore.getState())?.messages ?? [];
+  return messages[messages.length - 1];
+};
+
+const findMessage = (id: string): ThreadMessage | undefined => {
+  for (const thread of useSessionStore.getState().threads) {
+    const message = thread.messages.find((m) => m.id === id);
+    if (message) return message;
+  }
+  return undefined;
+};
 
 describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
   beforeEach(() => {
@@ -107,14 +126,12 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
     useAppStore.setState({ isPanicked: false, isVisible: true });
     useSettingsStore.setState({
       selectedProvider: "openrouter",
-      selectedModel: "anthropic/claude-haiku-5.5",
+      selectedModels: { openrouter: "anthropic/claude-haiku-5.5", anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
       apiKeys: {
         openrouter: "",
         anthropic: "",
         openai: "",
-        gemini: "",
         groq: "",
-        deepgram: "",
       },
       profile: {
         resumeText: "",
@@ -165,18 +182,43 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
       expect(systemPrompt).toContain("<stage_3_analysis>");
     });
 
-    it("constructs user prompt with question, quick pointers, and vision indicator", () => {
+    it("constructs user prompt with question, transcript, and vision indicator", () => {
       const userPrompt = buildUserPrompt("Design a rate limiter for multi-tenant API", {
-        quickPointers: ["Token Bucket", "Redis Lua script"],
         transcript: "So I was wondering how you would design this?",
         hasImage: true,
       });
 
-      expect(userPrompt).toContain("A screenshot of the active coding problem / whiteboard window has been attached.");
+      expect(userPrompt).toContain(
+        "A screenshot of the user's current screen (their active window) is attached. Use it together with the question."
+      );
       expect(userPrompt).toContain("Design a rate limiter for multi-tenant API");
-      expect(userPrompt).toContain("- Token Bucket");
-      expect(userPrompt).toContain("- Redis Lua script");
       expect(userPrompt).toContain("<transcript>\nSo I was wondering how you would design this?\n</transcript>");
+      expect(userPrompt).not.toContain("previous_exchanges");
+    });
+
+    it("caps the trade-offs and edge cases of an earlier answer at five each", () => {
+      const items = Array.from({ length: 8 }, (_, i) => `item ${i}`);
+      const text = solutionToText({
+        stage1Intuition: { verbalSummary: "Summary.", keyTradeoffs: items },
+        stage2Code: null,
+        stage3Analysis: { timeComplexity: "O(1)", spaceComplexity: "O(1)", edgeCases: items },
+      });
+
+      expect(text).toContain("- item 4");
+      expect(text).not.toContain("item 5");
+      expect(text.match(/- item/g)).toHaveLength(10);
+    });
+
+    it("puts the earlier exchanges of the thread before a follow-up, and keeps only the last six", () => {
+      const history = Array.from({ length: 8 }, (_, i) => ({ question: `Q${i + 1}`, answer: `A${i + 1}` }));
+      const userPrompt = buildUserPrompt("And the follow-up?", { history });
+
+      const block = userPrompt.slice(userPrompt.indexOf("<previous_exchanges>"), userPrompt.indexOf("</previous_exchanges>"));
+      expect(block).not.toContain("<question>Q2</question>");
+      expect(block).toContain("<question>Q3</question>");
+      expect(block).toContain("<answer>\nA8\n</answer>");
+      expect(userPrompt).toContain("is a follow-up to the previous exchanges");
+      expect(userPrompt.indexOf("<previous_exchanges>")).toBeLessThan(userPrompt.indexOf('Question / Coding Task:\n"And the follow-up?"'));
     });
   });
 
@@ -228,7 +270,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
 
       const gpt5 = buildOpenAIPayload({ apiKey: "sk-test", model: "openai/gpt-5.6-luna", prompt: "Two sum", onChunk: vi.fn() });
       expect(gpt5.model).toBe("gpt-5.6-luna");
-      expect(gpt5.max_completion_tokens).toBe(4096);
+      expect(gpt5.max_completion_tokens).toBe(16000);
       expect(gpt5.temperature).toBeUndefined();
       expect(gpt5.max_tokens).toBeUndefined();
     });
@@ -270,23 +312,6 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
       expect(payload.messages[1].content[1].type).toBe("image_url");
     });
 
-    it("builds Google Gemini payload with inlineData vision format", () => {
-      const payload = buildGeminiPayload({
-        apiKey: "gemini-test-key",
-        model: "google/gemini-2.0-flash",
-        prompt: "Implement LRU Cache",
-        systemPrompt: "Gemini system prompt",
-        imageBase64: sampleBase64,
-        onChunk: vi.fn(),
-      });
-
-      expect(payload.systemInstruction.parts[0].text).toBe("Gemini system prompt");
-      const parts = payload.contents[0].parts;
-      expect(parts[0].inlineData.mimeType).toBe("image/png");
-      expect(parts[0].inlineData.data).not.toContain("data:image/png;base64,");
-      expect(parts[1].text).toBe("Implement LRU Cache");
-      expect(getGeminiModel("google/gemini-2.0-flash")).toBe("gemini-2.0-flash");
-    });
   });
 
   describe("3. Progressive Streaming Parser (REQ-015, AC-006)", () => {
@@ -479,101 +504,35 @@ Space Complexity: O(C) capacity
       expect(chunks).toEqual(["OpenAI chunk"]);
       expect(result).toBe("OpenAI chunk");
     });
-
-    it("streamGemini parses candidates text parts", async () => {
-      const mockSSE = [
-        'data: {"candidates": [{"content": {"parts": [{"text": "Gemini chunk"}]}}]}\n\n',
-      ].join("");
-
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(mockSSE));
-
-      const chunks: string[] = [];
-      const result = await streamGemini({
-        apiKey: "gemini-key",
-        prompt: "test",
-        onChunk: (chunk) => chunks.push(chunk),
-      });
-
-      expect(chunks).toEqual(["Gemini chunk"]);
-      expect(result).toBe("Gemini chunk");
-    });
-  });
-
-  describe("5. Unified Dispatcher (dispatcher.ts)", () => {
-    it("returns the current default model for each provider", () => {
-      expect(getDefaultModelForProvider("openrouter")).toBe("anthropic/claude-haiku-5.5");
-      expect(getDefaultModelForProvider("anthropic")).toBe("claude-haiku-5-5");
-      expect(getDefaultModelForProvider("openai")).toBe("gpt-5.6-luna");
-      expect(getDefaultModelForProvider("gemini")).toBe("gemini-3.8-flash");
-      expect(getDefaultModelForProvider("groq")).toBe("openai/gpt-oss-120b");
-    });
-
-    it("routes groq provider requests to Groq completions endpoint", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response(
-          'data: {"choices":[{"delta":{"content":"<stage_1_intuition><verbal_summary>Groq fast inference</verbal_summary></stage_1_intuition>"}}]}\n\ndata: [DONE]\n\n',
-          { status: 200, headers: { "Content-Type": "text/event-stream" } }
-        )
-      );
-
-      const solution = await dispatchDeepSolve({
-        provider: "groq",
-        apiKey: "gsk_test123",
-        prompt: "Explain event loops",
-      });
-
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://api.groq.com/openai/v1/chat/completions",
-        expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({
-            Authorization: "Bearer gsk_test123",
-          }),
-        })
-      );
-      expect(solution.stage1Intuition?.verbalSummary).toContain("Groq fast inference");
-    });
   });
 
   describe("6. React Hook useDeepSolver & Panic Killswitch (Constraint 4, REQ-004, AC-002)", () => {
-    it("orchestrates deep solve and populates sessionStore progressively", async () => {
-      const onProgress = vi.fn();
-      const onComplete = vi.fn();
+    it("streams the answer into the question's message as it arrives", async () => {
       useOpenRouterKey();
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(SOLUTION_XML));
-
-      let resolveComplete: (() => void) | undefined;
-      const completePromise = new Promise<void>((resolve) => {
-        resolveComplete = resolve;
-      });
-
-      render(
-        <TestDeepSolverComponent
-          onProgress={onProgress}
-          onComplete={() => {
-            onComplete();
-            resolveComplete?.();
-          }}
-        />
-      );
-
-      const solveBtn = screen.getByTestId("solve-btn");
+      const streams = controlledFetch();
+      render(<TestDeepSolverComponent />);
 
       await act(async () => {
-        solveBtn.click();
+        screen.getByTestId("solve-btn").click();
       });
+      await waitFor(() => expect(streams).toHaveLength(1));
+      act(() => streams[0].push(SUMMARY_TAG));
 
-      await act(async () => {
-        await completePromise;
+      await waitFor(() => expect(lastMessage().solution?.stage1Intuition?.verbalSummary).toBe("Use a hash map for a single pass."));
+      expect(useSessionStore.getState().solvingMessageId).toBe(lastMessage().id);
+
+      act(() => {
+        streams[0].push(REST_OF_SOLUTION);
+        streams[0].finish();
       });
+      await waitFor(() => expect(lastMessage().solution?.stage3Analysis).not.toBeNull());
 
-      // Verify sessionStore has received the progressive solution
-      const storeState = useSessionStore.getState();
-      expect(storeState.stage1Intuition).not.toBeNull();
-      expect(storeState.stage2Code).not.toBeNull();
-      expect(storeState.stage3Analysis).not.toBeNull();
-      expect(onProgress).toHaveBeenCalled();
-      expect(onComplete).toHaveBeenCalled();
+      const message = lastMessage();
+      expect(message.question).toBe("How would you design a distributed cache?");
+      expect(message.solution?.stage1Intuition).not.toBeNull();
+      expect(message.solution?.stage2Code).not.toBeNull();
+      expect(message.error).toBeNull();
+      expect(useSessionStore.getState().solvingMessageId).toBeNull();
     });
 
     it("triggers window capture silently if available during solve", async () => {
@@ -593,34 +552,22 @@ Space Complexity: O(C) capacity
     });
 
     it("synchronously cancels in-flight stream when triggerPanic is activated (< 25ms, REQ-004)", async () => {
-      const onProgress = vi.fn();
-
-      render(<TestDeepSolverComponent onProgress={onProgress} />);
+      useOpenRouterKey();
+      const streams = controlledFetch();
+      render(<TestDeepSolverComponent />);
 
       await act(async () => {
         screen.getByTestId("solve-btn").click();
       });
+      await waitFor(() => expect(streams).toHaveLength(1));
 
       // Trigger panic killswitch
       await act(async () => {
         useAppStore.setState({ isPanicked: true, isVisible: false });
       });
 
-      expect(screen.getByTestId("is-solving").textContent).toBe("false");
-    });
-
-    it("aborts when the panic flag is set in the app store", async () => {
-      render(<TestDeepSolverComponent />);
-
-      await act(async () => {
-        screen.getByTestId("solve-btn").click();
-      });
-
-      await act(async () => {
-        useAppStore.setState({ isPanicked: true });
-      });
-
-      expect(screen.getByTestId("is-solving").textContent).toBe("false");
+      expect(useSessionStore.getState().solvingMessageId).toBeNull();
+      expect(useSessionStore.getState().threads).toEqual([]);
     });
 
     it("starts solving when window event sidekick:deep_solve is triggered", async () => {
@@ -631,25 +578,71 @@ Space Complexity: O(C) capacity
       await act(async () => {
         window.dispatchEvent(
           new CustomEvent("sidekick:deep_solve", {
-            detail: {
-              questionId: "q_test_123",
-              extractedQuestion: "How do you mitigate hot keys in Redis?",
-              quickPointers: ["Key salting", "L1 Cache"],
-              rawTranscript: "How do you mitigate hot keys in Redis?",
-              confidence: 0.95,
-              timestamp: Date.now(),
-            },
+            detail: { question: "How do you mitigate hot keys in Redis?", kind: "option", newThread: true },
           })
         );
       });
 
-      await waitFor(() => expect(useSessionStore.getState().stage3Analysis).not.toBeNull());
-      const storeState = useSessionStore.getState();
-      expect(storeState.stage1Intuition).not.toBeNull();
-      expect(storeState.stage2Code).not.toBeNull();
+      await waitFor(() => expect(lastMessage().solution?.stage3Analysis).not.toBeNull());
+      expect(lastMessage().kind).toBe("option");
+      expect(lastMessage().solution?.stage2Code).not.toBeNull();
     });
 
-    it("allows manual cancelSolve at any point", async () => {
+    it("marks the answer as viewing the screen only when a screenshot was attached", async () => {
+      useOpenRouterKey();
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(SOLUTION_XML));
+      const captureSpy = vi.spyOn(ipcModule, "captureActiveWindow").mockResolvedValueOnce({
+        base64_image: "data:image/jpeg;base64,/9j/4AAQ",
+        width: 1280,
+        height: 800,
+      });
+      render(<TestDeepSolverComponent />);
+
+      await act(async () => {
+        screen.getByTestId("solve-btn").click();
+      });
+      await waitFor(() => expect(lastMessage().solution).not.toBeNull());
+      expect(captureSpy).toHaveBeenCalled();
+      expect(lastMessage().viewedScreen).toBe(true);
+    });
+
+    it("sends the image with its real MIME type and the earlier exchange of the thread as a follow-up", async () => {
+      useOpenRouterKey();
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(SOLUTION_XML));
+      vi.spyOn(ipcModule, "captureActiveWindow").mockResolvedValue({
+        base64_image: "data:image/jpeg;base64,/9j/4AAQ",
+        width: 1280,
+        height: 800,
+      });
+      render(<TestDeepSolverComponent />);
+
+      await act(async () => {
+        screen.getByTestId("solve-btn").click();
+      });
+      await waitFor(() => expect(lastMessage().solution).not.toBeNull());
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("sidekick:deep_solve", {
+            detail: { question: "Which one would you pick?", captureWindow: false },
+          })
+        );
+      });
+      await waitFor(() => expect(lastMessage().question).toBe("Which one would you pick?"));
+      await waitFor(() => expect(useSessionStore.getState().solvingMessageId).toBeNull());
+
+      const firstBody = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+      expect(JSON.stringify(firstBody)).toContain("data:image/jpeg;base64");
+      expect(mimeTypeOfDataUrl("data:image/jpeg;base64,/9j/4AAQ")).toBe("image/jpeg");
+
+      const followUpBody = JSON.stringify(JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string));
+      expect(followUpBody).toContain("<previous_exchanges>");
+      expect(followUpBody).toContain("<question>How would you design a distributed cache?</question>");
+      expect(followUpBody).toContain("Use a hash map for a single pass.");
+      expect(followUpBody).not.toContain("data:image/jpeg;base64");
+    });
+
+    it("allows cancelling at any point with sidekick:cancel_solve", async () => {
       render(<TestDeepSolverComponent />);
 
       await act(async () => {
@@ -657,12 +650,12 @@ Space Complexity: O(C) capacity
         screen.getByTestId("cancel-btn").click();
       });
 
-      expect(screen.getByTestId("is-solving").textContent).toBe("false");
+      expect(useSessionStore.getState().solvingMessageId).toBeNull();
+      expect(useSessionStore.getState().threads).toEqual([]);
     });
 
     it("deduplicates rapid solve requests for same question within 500ms window", async () => {
-      const onStart = vi.fn();
-      render(<TestDeepSolverComponent onStart={onStart} />);
+      render(<TestDeepSolverComponent />);
 
       await act(async () => {
         screen.getByTestId("solve-btn").click();
@@ -670,7 +663,118 @@ Space Complexity: O(C) capacity
         screen.getByTestId("solve-btn").click();
       });
 
-      expect(onStart).toHaveBeenCalledTimes(1);
+      expect(activeThreadOf(useSessionStore.getState())?.messages).toHaveLength(1);
+    });
+  });
+
+  describe("7. Stopped answers: superseded, cleared or reopened mid-stream", () => {
+    const PARTIAL = "<stage_1_intuition>\n<verbal_summary>Partial summary</verbal_summary>";
+
+    it("a new question stops a streaming answer: a partial one says it stopped, and the new one answers", async () => {
+      useOpenRouterKey();
+      const streams = controlledFetch();
+      render(<TestDeepSolverComponent />);
+
+      act(() => requestSolve({ question: "First?", newThread: true }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+      act(() => streams[0].push(PARTIAL));
+      await waitFor(() => expect(lastMessage().solution?.stage1Intuition?.verbalSummary).toBe("Partial summary"));
+      const firstId = lastMessage().id;
+
+      act(() => requestSolve({ question: "Second?" }));
+      await waitFor(() => expect(streams).toHaveLength(2));
+
+      const messages = activeThreadOf(useSessionStore.getState())?.messages ?? [];
+      expect(messages.map((m) => m.question)).toEqual(["First?", "Second?"]);
+      expect(messages[0]).toMatchObject({ id: firstId, error: STOPPED_MESSAGE });
+      expect(messages[0].solution?.stage1Intuition?.verbalSummary).toBe("Partial summary");
+
+      act(() => {
+        streams[1].push(SUMMARY_TAG + REST_OF_SOLUTION);
+        streams[1].finish();
+      });
+      await waitFor(() => expect(lastMessage().solution?.stage3Analysis).not.toBeNull());
+      expect(lastMessage().error).toBeNull();
+    });
+
+    it("a new question that comes before any text removes the unanswered message", async () => {
+      useOpenRouterKey();
+      const streams = controlledFetch();
+      render(<TestDeepSolverComponent />);
+
+      act(() => requestSolve({ question: "Silent?", newThread: true }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+      act(() => requestSolve({ question: "Next?" }));
+      await waitFor(() => expect(streams).toHaveLength(2));
+
+      expect((activeThreadOf(useSessionStore.getState())?.messages ?? []).map((m) => m.question)).toEqual(["Next?"]);
+    });
+
+    it("clearing history mid-stream stops the answer, and a late write goes nowhere", async () => {
+      useOpenRouterKey();
+      const streams = controlledFetch();
+      render(<TestDeepSolverComponent />);
+
+      act(() => requestSolve({ question: "Clear me?", newThread: true }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+      act(() => streams[0].push(PARTIAL));
+      await waitFor(() => expect(lastMessage().solution).not.toBeNull());
+      const threadId = activeThreadOf(useSessionStore.getState())!.id;
+      const messageId = lastMessage().id;
+
+      act(() => useSessionStore.getState().clearThreads());
+      expect(useSessionStore.getState().threads).toEqual([]);
+      expect(useSessionStore.getState().solvingMessageId).toBeNull();
+
+      useSessionStore.getState().updateMessage(threadId, messageId, { solution: null, error: "late" });
+      expect(useSessionStore.getState().threads).toEqual([]);
+    });
+
+    it("reopening another chat mid-stream keeps writing to the original message", async () => {
+      useOpenRouterKey();
+      const streams = controlledFetch();
+      const other = useSessionStore
+        .getState()
+        .beginMessage({ question: "Other chat", kind: "typed", newThread: true })!;
+      render(<TestDeepSolverComponent />);
+
+      act(() => requestSolve({ question: "Streaming chat?", newThread: true }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+      const streamingId = lastMessage().id;
+
+      act(() => useSessionStore.getState().openThread(other.threadId));
+      act(() => streams[0].push(SUMMARY_TAG));
+
+      await waitFor(() => expect(findMessage(streamingId)?.solution?.stage1Intuition).not.toBeNull());
+      expect(activeThreadOf(useSessionStore.getState())?.id).toBe(other.threadId);
+      expect(activeThreadOf(useSessionStore.getState())?.messages[0].solution).toBeNull();
+
+      act(() => {
+        streams[0].push(REST_OF_SOLUTION);
+        streams[0].finish();
+      });
+      await waitFor(() => expect(findMessage(streamingId)?.solution?.stage3Analysis).not.toBeNull());
+      expect(findMessage(streamingId)?.error).toBeNull();
+    });
+
+    it("a finished answer is not touched when a new question follows it", async () => {
+      useOpenRouterKey();
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(sseResponse(SOLUTION_XML));
+      render(<TestDeepSolverComponent />);
+
+      await act(async () => {
+        screen.getByTestId("solve-btn").click();
+      });
+      await waitFor(() => expect(lastMessage().solution?.stage3Analysis).not.toBeNull());
+      const finished = lastMessage();
+
+      const streams = controlledFetch();
+      act(() => requestSolve({ question: "And then?" }));
+      await waitFor(() => expect(streams).toHaveLength(1));
+
+      expect(findMessage(finished.id)).toMatchObject({ error: null });
+      expect(findMessage(finished.id)?.solution?.stage3Analysis).not.toBeNull();
+      streams[0].finish();
     });
   });
 });

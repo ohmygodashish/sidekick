@@ -48,6 +48,11 @@ body,
   --sk-warn: #fcd34d;
   --sk-success: #6ee7b7;
 
+  /* Hover hints under the pill: a dark label in both themes */
+  --sk-tip: #27272a;
+  --sk-tip-fg: #f4f4f5;
+  --sk-tip-key: rgb(255 255 255 / 0.14);
+
   /* Audio sources: system audio and the microphone */
   --sk-system: #38bdf8;
   --sk-mic: #fb923c;
@@ -90,6 +95,10 @@ body,
   --sk-danger-solid-hover: #b91c1c;
   --sk-warn: #b45309;
   --sk-success: #047857;
+
+  --sk-tip: #18181b;
+  --sk-tip-fg: #fafafa;
+  --sk-tip-key: rgb(255 255 255 / 0.16);
 
   --sk-system: #0284c7;
   --sk-mic: #ea580c;
@@ -136,6 +145,48 @@ body,
   }
   .sk-menu {
     @apply sk-surface rounded-xl p-1;
+  }
+
+  /*
+   * Hover hint (Tip.tsx). Shows on hover or keyboard focus after 400 ms; hides at once on leave.
+   * Not a surface: it is outside the hit regions and never takes pointer events.
+   */
+  .sk-tip-host > .sk-tip {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    background-color: var(--sk-tip);
+    color: var(--sk-tip-fg);
+    box-shadow: var(--sk-shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms var(--sk-ease) 0ms;
+  }
+  .sk-tip-host[data-hover] > .sk-tip,
+  .sk-tip-host:has(:focus-visible) > .sk-tip {
+    opacity: 1;
+    transition-delay: 400ms;
+  }
+  .sk-tip-host > .sk-tip .sk-kbd {
+    background-color: var(--sk-tip-key);
+    color: var(--sk-tip-fg);
+  }
+  /* Warm: a tip in this surface has shown and the pointer is still on it, so neighbours switch instantly */
+  .sk-tips-warm[data-hover] .sk-tip-host > .sk-tip {
+    transition-duration: 0ms;
+    transition-delay: 0ms;
   }
 
   /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
@@ -200,6 +251,8 @@ body,
  * .sk-pop: popups and pieces that come and go. Enters via @starting-style; with usePresence,
  *   data-state="closed" plays a faster exit before unmount.
  * .sk-fade: text that changes often (options, captions); key the element by its text to refade.
+ * .sk-fade-out: the outgoing text of a cross-fade (FadeText in LiveOptions).
+ * .sk-rise: a new message in a thread; fades in rising 4px.
  */
 .sk-pop {
   transition:
@@ -215,6 +268,20 @@ body,
 .sk-fade {
   transition: opacity 150ms var(--sk-ease);
 }
+/* .sk-fade-out: the outgoing text of a cross-fade; mounted already visible, then fades and blurs away */
+.sk-fade-out {
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity 120ms var(--sk-ease),
+    filter 120ms var(--sk-ease);
+}
+/* .sk-rise: a new message in a thread: fades in while rising 4px */
+.sk-rise {
+  transition:
+    opacity 160ms var(--sk-ease),
+    transform 160ms var(--sk-ease);
+}
 @starting-style {
   .sk-pop {
     opacity: 0;
@@ -223,10 +290,26 @@ body,
   .sk-fade {
     opacity: 0;
   }
+  .sk-fade-out {
+    opacity: 1;
+    filter: none;
+  }
+  .sk-rise {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 /* Popups grow from their trigger */
 .sk-menu.sk-pop {
   transform-origin: top right;
+}
+
+/* Theme changes land in one frame: transitions are off while data-theme changes (useTheme).
+   Not the segmented thumb: it slides to the theme just picked, and has no colour transition. */
+:root[data-theme-switching] *:not(.sk-thumb),
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -234,13 +317,23 @@ body,
   .sk-pop[data-state="closed"] {
     transform: none;
   }
+  .sk-tip-host > .sk-tip {
+    transition-duration: 0ms;
+  }
   /* No press-scale either; colour and opacity feedback remain */
   *:active {
     --tw-scale-x: 1;
     --tw-scale-y: 1;
   }
+  /* A still spinner: the "Thinking…" text says the same */
+  .animate-spin {
+    animation: none;
+  }
   @starting-style {
     .sk-pop {
+      transform: none;
+    }
+    .sk-rise {
       transform: none;
     }
   }

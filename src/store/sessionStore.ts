@@ -9,15 +9,6 @@ export interface TranscriptTurn {
   timestamp: number;
 }
 
-export interface DetectedQuestion {
-  questionId: string;
-  timestamp: number;
-  confidence: number;
-  rawTranscript: string;
-  extractedQuestion: string;
-  quickPointers: string[];
-}
-
 export interface Stage1Intuition {
   verbalSummary: string;
   keyTradeoffs: string[];
@@ -44,18 +35,59 @@ export interface ProgressiveSolution {
   stage3Analysis: Stage3Analysis | null;
 }
 
+/** typed: Ask box · option: a live option picked · assist: ⌘↵ */
+export type MessageKind = "typed" | "option" | "assist";
+
+export interface ThreadMessage {
+  id: string;
+  question: string;
+  kind: MessageKind;
+  viewedScreen: boolean; // a screenshot was attached to this answer
+  solution: ProgressiveSolution | null;
+  error: string | null;
+}
+
+/** One chat: a first question and the follow-ups that continue it. */
+export interface Thread {
+  id: string;
+  startedAt: number;
+  messages: ThreadMessage[]; // oldest first
+}
+
+export type MessagePatch = Partial<Pick<ThreadMessage, "viewedScreen" | "solution" | "error">>;
+
+export interface BegunMessage {
+  threadId: string;
+  messageId: string;
+  /** Messages in the same thread before this one (the follow-up context) */
+  before: ThreadMessage[];
+}
+
+export interface SolveRequest {
+  question: string;
+  kind?: MessageKind; // default "typed"
+  newThread?: boolean; // default false: continue the active thread
+  captureWindow?: boolean; // default true
+  retryMessageId?: string; // rerun that message in place
+}
+
+export const STOPPED_MESSAGE = "Stopped before it finished.";
+
+/** Asks the solver (useDeepSolver) for an answer; it adds the message and streams the answer into it. */
+export function requestSolve(request: SolveRequest): void {
+  window.dispatchEvent(new CustomEvent("sidekick:deep_solve", { detail: request }));
+}
+
+export const activeThreadOf = (s: Pick<SessionState, "threads" | "activeThreadId">): Thread | null =>
+  s.threads.find((t) => t.id === s.activeThreadId) ?? null;
+
 export interface SessionState {
   transcript: TranscriptTurn[];
-  activeQuestion: DetectedQuestion | null;
-  stage1Intuition: Stage1Intuition | null;
-  stage2Code: Stage2Code | null;
-  stage3Analysis: Stage3Analysis | null;
-  activeSolutionProvider: string | null;
-  activeSolutionModel: string | null;
-  progressiveSolution: ProgressiveSolution | null;
-  isSolving: boolean;
-  streamingStage: 1 | 2 | 3 | null;
-  solveError: string | null;
+
+  // This meeting only, in memory: newest thread first. The panel shows the active one.
+  threads: Thread[];
+  activeThreadId: string | null;
+  solvingMessageId: string | null; // the message being streamed, if any
 
   // Live options: the asked question stays pinned until the next one is asked
   askedQuestion: string | null;
@@ -63,64 +95,63 @@ export interface SessionState {
   pickedOption: string | null;
   optionsError: string | null;
 
+  // Screen toggles and the Ask draft, session only
+  askDraft: string;
+  askUsesScreen: boolean;
+  optionsUseScreen: boolean;
+
   // Actions
   addTranscriptTurn: (turn: Omit<TranscriptTurn, "id"> & { id?: string }) => void;
-  setActiveQuestion: (
-    question:
-      | DetectedQuestion
-      | {
-          question_id?: string;
-          timestamp?: number;
-          confidence?: number;
-          raw_transcript?: string;
-          extracted_question?: string;
-          quick_pointers?: string[];
-        }
-      | null
-  ) => void;
-  setSolution: (
-    solution:
-      | ProgressiveSolution
-      | {
-          question_id?: string;
-          provider?: string;
-          model?: string;
-          stage_1_intuition?: {
-            verbal_summary?: string;
-            key_tradeoffs?: string[];
-          };
-          stage_2_code?: {
-            language?: string;
-            code?: string;
-            explanation?: string;
-          };
-          stage_3_analysis?: {
-            time_complexity?: string;
-            space_complexity?: string;
-            edge_cases?: string[];
-          };
-        }
-      | null
-  ) => void;
+  /** Adds a message to the active thread (or to a new one), or resets a failed message for a retry */
+  beginMessage: (input: {
+    question: string;
+    kind: MessageKind;
+    newThread: boolean;
+    retryMessageId?: string;
+  }) => BegunMessage | null;
+  updateMessage: (threadId: string, messageId: string, patch: MessagePatch) => void;
+  /** A solve was aborted: an unanswered message is removed, a partial answer says it stopped */
+  stopMessage: (threadId: string, messageId: string) => void;
+  openThread: (threadId: string) => void;
+  // Ends the answer on screen (cancels a running solve) and ends the active thread; it stays in history
+  clearAnswer: () => void;
+  // Ends every thread: Stop, panic, Burn
+  clearThreads: () => void;
   clearSession: () => void;
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+const newId = (prefix: string) =>
+  `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+const cancelSolve = () => window.dispatchEvent(new Event("sidekick:cancel_solve"));
+// The slot-1 prefetch (hooks/prefetch.ts) goes with the chats; a new question or New chat keeps it
+const discardPrefetch = () => window.dispatchEvent(new Event("sidekick:discard_prefetch"));
+
+const hasAnswer = (solution: ProgressiveSolution | null) =>
+  Boolean(solution && (solution.stage1Intuition || solution.stage2Code || solution.stage3Analysis));
+
+const mapMessage = (
+  threads: Thread[],
+  threadId: string,
+  messageId: string,
+  change: (m: ThreadMessage) => ThreadMessage
+): Thread[] =>
+  threads.map((t) =>
+    t.id !== threadId ? t : { ...t, messages: t.messages.map((m) => (m.id === messageId ? change(m) : m)) }
+  );
+
+export const useSessionStore = create<SessionState>((set, get) => ({
   transcript: [],
-  activeQuestion: null,
-  stage1Intuition: null,
-  stage2Code: null,
-  stage3Analysis: null,
-  activeSolutionProvider: null,
-  activeSolutionModel: null,
-  progressiveSolution: null,
-  isSolving: false,
-  streamingStage: null,
-  solveError: null,
+  threads: [],
+  activeThreadId: null,
+  solvingMessageId: null,
   askedQuestion: null,
   likelyQuestions: [],
   pickedOption: null,
   optionsError: null,
+  askDraft: "",
+  askUsesScreen: true,
+  optionsUseScreen: false,
 
   addTranscriptTurn: (turn) => {
     const id =
@@ -130,145 +161,98 @@ export const useSessionStore = create<SessionState>((set) => ({
     }));
   },
 
-  setActiveQuestion: (raw) => {
-    if (!raw) {
-      set({ activeQuestion: null });
-      return;
+  beginMessage: ({ question, kind, newThread, retryMessageId }) => {
+    const { threads, activeThreadId } = get();
+
+    if (retryMessageId) {
+      for (const thread of threads) {
+        const index = thread.messages.findIndex((m) => m.id === retryMessageId);
+        if (index === -1) continue;
+        set({
+          threads: mapMessage(threads, thread.id, retryMessageId, (m) => ({
+            ...m,
+            viewedScreen: false,
+            solution: null,
+            error: null,
+          })),
+        });
+        return { threadId: thread.id, messageId: retryMessageId, before: thread.messages.slice(0, index) };
+      }
+      return null;
     }
 
-    // Support both camelCase and snake_case backend payloads
-    const questionId =
-      "questionId" in raw
-        ? raw.questionId
-        : "question_id" in raw && raw.question_id
-          ? raw.question_id
-          : `q_${Date.now()}`;
-    const timestamp = raw.timestamp ?? Date.now();
-    const confidence = raw.confidence ?? 1.0;
-    const rawTranscript =
-      "rawTranscript" in raw
-        ? raw.rawTranscript
-        : "raw_transcript" in raw && raw.raw_transcript
-          ? raw.raw_transcript
-          : "";
-    const extractedQuestion =
-      "extractedQuestion" in raw
-        ? raw.extractedQuestion
-        : "extracted_question" in raw && raw.extracted_question
-          ? raw.extracted_question
-          : "";
-    const quickPointers =
-      "quickPointers" in raw
-        ? raw.quickPointers
-        : "quick_pointers" in raw && Array.isArray(raw.quick_pointers)
-          ? raw.quick_pointers
-          : [];
-
-    set({
-      activeQuestion: {
-        questionId,
-        timestamp,
-        confidence,
-        rawTranscript,
-        extractedQuestion,
-        quickPointers,
-      },
-    });
-  },
-
-  setSolution: (raw) => {
-    if (!raw) {
-      set({
-        stage1Intuition: null,
-        stage2Code: null,
-        stage3Analysis: null,
-        activeSolutionProvider: null,
-        activeSolutionModel: null,
-        progressiveSolution: null,
-      });
-      return;
-    }
-
-    // Parse Stage 1
-    let stage1: Stage1Intuition | null = null;
-    if ("stage1Intuition" in raw && raw.stage1Intuition) {
-      stage1 = raw.stage1Intuition;
-    } else if ("stage_1_intuition" in raw && raw.stage_1_intuition) {
-      const s1 = raw.stage_1_intuition;
-      stage1 = {
-        verbalSummary: s1.verbal_summary ?? "",
-        keyTradeoffs: Array.isArray(s1.key_tradeoffs) ? s1.key_tradeoffs : [],
-      };
-    }
-
-    // Parse Stage 2
-    let stage2: Stage2Code | null = null;
-    if ("stage2Code" in raw && raw.stage2Code) {
-      stage2 = raw.stage2Code;
-    } else if ("stage_2_code" in raw && raw.stage_2_code) {
-      const s2 = raw.stage_2_code;
-      stage2 = {
-        language: s2.language ?? "python",
-        code: s2.code ?? "",
-        explanation: s2.explanation ?? "",
-      };
-    }
-
-    // Parse Stage 3
-    let stage3: Stage3Analysis | null = null;
-    if ("stage3Analysis" in raw && raw.stage3Analysis) {
-      stage3 = raw.stage3Analysis;
-    } else if ("stage_3_analysis" in raw && raw.stage_3_analysis) {
-      const s3 = raw.stage_3_analysis;
-      stage3 = {
-        timeComplexity: s3.time_complexity ?? "",
-        spaceComplexity: s3.space_complexity ?? "",
-        edgeCases: Array.isArray(s3.edge_cases) ? s3.edge_cases : [],
-      };
-    }
-
-    const questionId =
-      "questionId" in raw
-        ? raw.questionId
-        : "question_id" in raw
-          ? raw.question_id
-          : undefined;
-
-    const progressiveSolution: ProgressiveSolution = {
-      questionId,
-      provider: raw.provider ?? undefined,
-      model: raw.model ?? undefined,
-      stage1Intuition: stage1,
-      stage2Code: stage2,
-      stage3Analysis: stage3,
+    const message: ThreadMessage = {
+      id: newId("msg"),
+      question,
+      kind,
+      viewedScreen: false,
+      solution: null,
+      error: null,
     };
+    const current = threads.find((t) => t.id === activeThreadId);
+    if (current && !newThread) {
+      set({
+        threads: threads.map((t) => (t === current ? { ...t, messages: [...t.messages, message] } : t)),
+      });
+      return { threadId: current.id, messageId: message.id, before: current.messages };
+    }
 
-    set({
-      stage1Intuition: stage1,
-      stage2Code: stage2,
-      stage3Analysis: stage3,
-      activeSolutionProvider: raw.provider ?? null,
-      activeSolutionModel: raw.model ?? null,
-      progressiveSolution,
-    });
+    const thread: Thread = { id: newId("thread"), startedAt: Date.now(), messages: [message] };
+    set({ threads: [thread, ...threads], activeThreadId: thread.id });
+    return { threadId: thread.id, messageId: message.id, before: [] };
   },
 
-  clearSession: () =>
+  // A write for a message that was cleared or never existed does nothing
+  updateMessage: (threadId, messageId, patch) =>
+    set((state) => {
+      const exists = state.threads.some((t) => t.id === threadId && t.messages.some((m) => m.id === messageId));
+      if (!exists) return {};
+      return { threads: mapMessage(state.threads, threadId, messageId, (m) => ({ ...m, ...patch })) };
+    }),
+
+  stopMessage: (threadId, messageId) =>
+    set((state) => {
+      const thread = state.threads.find((t) => t.id === threadId);
+      const message = thread?.messages.find((m) => m.id === messageId);
+      if (!thread || !message) return {};
+      if (hasAnswer(message.solution)) {
+        return { threads: mapMessage(state.threads, threadId, messageId, (m) => ({ ...m, error: STOPPED_MESSAGE })) };
+      }
+      const messages = thread.messages.filter((m) => m.id !== messageId);
+      if (messages.length > 0) {
+        return { threads: state.threads.map((t) => (t.id === threadId ? { ...t, messages } : t)) };
+      }
+      // Nothing was answered in this chat: it leaves history too
+      return {
+        threads: state.threads.filter((t) => t.id !== threadId),
+        activeThreadId: state.activeThreadId === threadId ? null : state.activeThreadId,
+      };
+    }),
+
+  openThread: (threadId) =>
+    set((state) =>
+      state.threads.some((t) => t.id === threadId) ? { activeThreadId: threadId, pickedOption: null } : {}
+    ),
+
+  clearAnswer: () => {
+    cancelSolve();
+    set({ activeThreadId: null, pickedOption: null, solvingMessageId: null });
+  },
+
+  clearThreads: () => {
+    // Cancel first, so a running answer is stopped while its message still exists
+    cancelSolve();
+    discardPrefetch();
+    set({ threads: [], activeThreadId: null, solvingMessageId: null, askDraft: "", pickedOption: null });
+  },
+
+  clearSession: () => {
+    get().clearThreads();
     set({
       transcript: [],
-      activeQuestion: null,
-      stage1Intuition: null,
-      stage2Code: null,
-      stage3Analysis: null,
-      activeSolutionProvider: null,
-      activeSolutionModel: null,
-      progressiveSolution: null,
-      isSolving: false,
-      streamingStage: null,
-      solveError: null,
       askedQuestion: null,
       likelyQuestions: [],
-      pickedOption: null,
       optionsError: null,
-    }),
+    });
+  },
 }));

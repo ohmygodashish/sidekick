@@ -2,11 +2,16 @@ import { useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { HUDContainer } from "./components/hud/HUDContainer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
-import { useSettingsStore } from "./store/settingsStore";
+import { pushMicDevice, pushSttLanguage, useSettingsStore } from "./store/settingsStore";
+import { useSessionStore } from "./store/sessionStore";
 import { useLiveOptions } from "./hooks/useLiveOptions";
 import { useDeepSolver } from "./hooks/useDeepSolver";
 import { useTheme } from "./hooks/useTheme";
+import { useFocusRelease } from "./hooks/useFocusRelease";
+import { usePointerHover } from "./hooks/usePointerHover";
+import { useWarmup } from "./hooks/useWarmup";
 import { setSttEngine } from "./lib/ipc";
+import { CODING_MODE_ID } from "./services/ai/modes";
 
 export default function App() {
   const syncFromBackend = useAppStore((state) => state.syncFromBackend);
@@ -21,14 +26,30 @@ export default function App() {
   // System / Light / Dark from Settings
   useTheme();
 
+  // Keyboard focus returns to the previous app after clicks outside text fields
+  useFocusRelease();
+
+  // Hover styles follow the pointer that Rust reports (WebKit doesn't track it over the overlay)
+  usePointerHover();
+
+  // Connections and prompt cache for the answer provider are warmed as Sidekick shows and as a meeting goes live
+  useWarmup();
+
   useEffect(() => {
     syncFromBackend();
     useSettingsStore.getState().loadApiKeysFromBackend();
-    // Settings hydrate async inside Tauri; push the saved STT engine only once loaded
-    const syncSttEngine = () => setSttEngine(useSettingsStore.getState().sttMode);
+    // Settings hydrate async inside Tauri; push the saved audio settings only once loaded
+    const syncAudioSettings = () => {
+      const { sttMode, activeModeId } = useSettingsStore.getState();
+      // The language check runs after the engine is set: Rust answers with a note for the pair
+      void setSttEngine(sttMode).then(pushSttLanguage);
+      void pushMicDevice();
+      // Coding turns the options' screen on at startup, as choosing it does
+      useSessionStore.setState({ optionsUseScreen: activeModeId === CODING_MODE_ID });
+    };
     let unsubHydration: (() => void) | undefined;
-    if (useSettingsStore.persist.hasHydrated()) syncSttEngine();
-    else unsubHydration = useSettingsStore.persist.onFinishHydration(syncSttEngine);
+    if (useSettingsStore.persist.hasHydrated()) syncAudioSettings();
+    else unsubHydration = useSettingsStore.persist.onFinishHydration(syncAudioSettings);
     // Audio capture starts only when the user presses Start in the bar.
 
     // StrictMode mounts twice in dev; drop listeners that resolve after cleanup
@@ -39,19 +60,10 @@ export default function App() {
       else cleanupFn = unlisten;
     });
 
-    const handleSettingsHotkey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        useSettingsStore.getState().toggleSettings();
-      }
-    };
-    window.addEventListener("keydown", handleSettingsHotkey);
-
     return () => {
       cancelled = true;
       unsubHydration?.();
       cleanupFn?.();
-      window.removeEventListener("keydown", handleSettingsHotkey);
     };
   }, [syncFromBackend]);
 

@@ -1,4 +1,5 @@
 /** @type {import('tailwindcss').Config} */
+import plugin from "tailwindcss/plugin";
 
 // Theme tokens from src/index.css; they switch with data-theme, so no alpha modifiers on these
 const token = (name) => `var(--sk-${name})`;
@@ -22,5 +23,6 @@ export default {
       },
     },
   },
-  plugins: [],
+  // Hover follows data-hover (usePointerHover), not :hover: WebKit doesn't track the pointer over this non-key overlay
+  plugins: [plugin(({ addVariant }) => addVariant("hover", "&[data-hover]"))],
 };

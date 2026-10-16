@@ -211,7 +211,7 @@ pub struct WhisperConfig {
     pub use_metal: bool,
     /// Number of CPU threads to utilize for pre/post processing
     pub n_threads: u32,
-    /// Spoken language code (default: "en")
+    /// Spoken language: "auto" to detect, or an ISO-639-1 code (default: "en")
     pub language: String,
     /// Translate to English if audio is in another language
     pub translate: bool,
@@ -398,6 +398,18 @@ impl LocalWhisperEngine {
         }
 
         Ok(path)
+    }
+
+    /// Sets the spoken language used by the next transcription ("auto" or an ISO-639-1 code)
+    pub fn set_language(&self, language: &str) {
+        if let Ok(mut guard) = self.config.write() {
+            guard.language = language.to_string();
+        }
+    }
+
+    /// The spoken language used for transcription ("auto" or an ISO-639-1 code)
+    pub fn language(&self) -> String {
+        self.config.read().map(|c| c.language.clone()).unwrap_or_else(|_| "en".to_string())
     }
 
     /// Sets or clears a canned mock response for testing

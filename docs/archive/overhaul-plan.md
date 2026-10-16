@@ -1,5 +1,7 @@
 # Usability overhaul plan (16 Oct 2026)
 
+> **Superseded (17 Oct 2026).** This usability plan is historical; its body is not updated. For current behaviour, read [`cluely-parity-plan.md`](../cluely-parity-plan.md) and the [README](../../README.md).
+
 Decided with the user in a grill-me session. Branch: `fix/usability-overhaul`, at least one commit per phase.
 Audit IDs refer to [`audit.md`](audit.md).
 

@@ -19,6 +19,8 @@ export function useHitRegions(ref: RefObject<HTMLElement | null>) {
       const rects: number[][] = [];
       for (const piece of Array.from(el.querySelectorAll(SURFACES))) {
         resizeObserver.observe(piece); // no-op if already observed
+        // A piece playing its exit is inert, so clicks pass through it to the app below
+        if (piece.closest('[data-state="closed"]')) continue;
         const r = piece.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) rects.push([r.x, r.y, r.width, r.height].map(Math.round));
       }
@@ -34,7 +36,7 @@ export function useHitRegions(ref: RefObject<HTMLElement | null>) {
     resizeObserver.observe(el);
     // Pieces mount, unmount and animate without the root's box changing
     const mutationObserver = new MutationObserver(measure);
-    mutationObserver.observe(el, { childList: true, subtree: true });
+    mutationObserver.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
     el.addEventListener("animationend", measure);
     el.addEventListener("transitionend", measure);
     measure();
