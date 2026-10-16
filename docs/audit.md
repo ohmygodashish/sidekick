@@ -1,5 +1,7 @@
 # Sidekick audit, 16 Oct 2026 (HEAD 67eb208)
 
+> **Snapshot; since then (17 Oct 2026):** this audit describes the code at 16 Oct 2026, and its findings are not rewritten. Since then: Deepgram and Gemini are removed (speech-to-text is on-device Whisper or Groq; answers are Anthropic, OpenAI or OpenRouter, and Groq answers are gone); the turn ends after 0.8 s of silence (was 1.1 s); panic hides the window, wipes audio, deletes the session database and quits the process; ⌘⇧Space is now ⌘\ and ⌘⇧S window capture is replaced by the screen toggles; Settings has the tabs General, Profile, Modes, Audio and Keybinds (the Danger and Appearance tabs are gone, with Appearance in General and Burn and Reset under its Advanced fold); the overlay is a non-activating panel; answers have threads, a meeting-only History and ⌘↵ Assist. For current behaviour see the [README](../README.md) and [`cluely-parity-plan.md`](cluely-parity-plan.md).
+
 > **Status update 2 (16 Oct 2026, usability overhaul on `fix/usability-overhaul`, see [`overhaul-plan.md`](overhaul-plan.md)).**
 >
 > **Fixed:**
@@ -63,7 +65,7 @@ Checks: `tsc` clean, vitest 153/153, Rust unit tests 71/71.
 | Area | Result |
 | --- | --- |
 | Audio capture now starts | Fixed "audio never starts". New issues: it starts at launch with the window hidden, never stops, restarts on every summon, and drops the turn in progress each time (AU-N2, AU-N3, AU-N4, ST-N1). |
-| Groq / Deepgram speech-to-text | Now real HTTP calls; only the chosen engine is used. A failure or missing key falls back to invented transcript text (AU-N1). |
+| Groq / Deepgram speech-to-text (Deepgram removed 16 Oct 2026) | Now real HTTP calls; only the chosen engine is used. A failure or missing key falls back to invented transcript text (AU-N1). |
 | `useQuestionDetector({ allowCandidate: true })` | New bug: your own speech can become the active question in every layout (FE-N3). |
 | Settings inputs and provider rows | Padding unified, long subtitles truncate. Token drift elsewhere unchanged. |
 | Window shadow off | No issues found. |

@@ -10,6 +10,8 @@ tags: [plan, implementation, tauri, rust, react, stealth, macos]
 
 # Sidekick Implementation Plan
 
+> **Superseded (17 Oct 2026).** This is the original build plan, kept as history; its body is not updated. For current behaviour (shortcuts, Settings layout, models, threads, panic), read [`cluely-parity-plan.md`](cluely-parity-plan.md) and the [README](../README.md).
+
 This document defines the phased, task-by-task engineering roadmap for building Sidekick. Each task is self-contained with explicit pre-conditions, detailed technical instructions, target files, acceptance criteria, and verification commands.
 
 ---

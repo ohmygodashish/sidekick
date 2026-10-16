@@ -53,14 +53,14 @@ While the visible-only keys are registered, the focused app loses them: ⌘←/�
 
 Agent assignment per phase follows the workflow in memory (`subagent-workflow`): Haiku 5.5 implementers, Sonnet 5.5 reviewers, Opus 5.5 advisor.
 
-1. **Focus, window and panic** (Rust, `appkit/*`, `hotkeys/mod.rs`): non-activating panel; show without activating; return focus to the previous app; panic quits after the wipe and deletes the session DB.
-2. **Shortcuts**: new global map with visible-only registration; move and scroll; pill tooltips; Settings → Keybinds list.
-3. **Answers**: threads with context, New chat, session History, ⌘↵ Assist, screen toggle with downscaled parallel capture, "Viewed screen" label.
-4. **Settings**: icon tabs; Modes (presets and custom, wired into answer and live-option prompts, … menu picker); Languages (STT and output); mic device and Test meter.
-5. **Latency**: 0.8 s turn end; warm connection; prompt caching; slot-1 prefetch. Measure pick → first token before and after.
-5b. **Models**: Settings → General with the provider control, per-provider model lists and the Groq evaluator card; locked thinking on always-thinking models; drop Groq answers; migrate saved models.
-6. **Motion**: `improve-animations` audit, then the fixes listed above.
-7. **Verify and document**: real-window checks on the normal stealth build (focus, keys, panic, motion), `tsc`, vitest, `cargo test --lib`, `npm run build`, invisibility tests; update README, spec and audit.
+1. **Focus, window and panic** (Rust, `appkit/*`, `hotkeys/mod.rs`): non-activating panel; show without activating; return focus to the previous app; panic quits after the wipe and deletes the session DB. Done.
+2. **Shortcuts**: new global map with visible-only registration; move and scroll; pill tooltips; Settings → Keybinds list. Done.
+3. **Answers**: threads with context, New chat, session History, ⌘↵ Assist, screen toggle with downscaled parallel capture, "Viewed screen" label. Done.
+4. **Settings**: icon tabs; Modes (presets and custom, wired into answer and live-option prompts, … menu picker); Languages (STT and output); mic device and Test meter. Done.
+5. **Latency**: 0.8 s turn end; warm connection; prompt caching; slot-1 prefetch. Measure pick → first token before and after. Done.
+5b. **Models**: Settings → General with the provider control, per-provider model lists and the Groq evaluator card; locked thinking on always-thinking models; drop Groq answers; migrate saved models. Done.
+6. **Motion**: `improve-animations` audit, then the fixes listed above. Done.
+7. **Verify and document**: real-window checks on the normal stealth build (focus, keys, panic, motion), `tsc`, vitest, `cargo test --lib`, `npm run build`, invisibility tests; update README, spec and audit. Done.
 
 ## Out of scope
 
