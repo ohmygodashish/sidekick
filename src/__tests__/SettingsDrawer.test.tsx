@@ -4,6 +4,7 @@ import { SettingsDrawer } from "../components/settings/SettingsDrawer";
 import { useSettingsStore } from "../store/settingsStore";
 import { useSessionStore } from "../store/sessionStore";
 import * as ipc from "../lib/ipc";
+import { SHORTCUTS } from "../lib/shortcuts";
 
 function providerRow(name: string): HTMLElement {
   return screen.getByRole("heading", { name }).closest("div.rounded-lg") as HTMLElement;
@@ -31,13 +32,13 @@ describe("SettingsDrawer", () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it("renders an inline dialog with five tabs, Keys selected by default", () => {
+    it("renders an inline dialog with six tabs, API keys selected by default", () => {
       render(<SettingsDrawer isOpen={true} />);
 
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Appearance", "Danger"]);
-      expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("true");
+      expect(tabs.map((t) => t.textContent)).toEqual(["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]);
+      expect(screen.getByRole("tab", { name: "API keys" }).getAttribute("aria-selected")).toBe("true");
     });
 
     it("switches tabs and marks the selected one", () => {
@@ -45,7 +46,7 @@ describe("SettingsDrawer", () => {
 
       openTab("Profile");
       expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
-      expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("tab", { name: "API keys" }).getAttribute("aria-selected")).toBe("false");
       expect(screen.getByText("Changes save automatically.")).toBeDefined();
 
       openTab("Audio");
@@ -65,13 +66,13 @@ describe("SettingsDrawer", () => {
 
     it("moves between tabs with the arrow keys", () => {
       render(<SettingsDrawer isOpen={true} />);
-      const keysTab = screen.getByRole("tab", { name: "Keys" });
+      const keysTab = screen.getByRole("tab", { name: "API keys" });
 
       fireEvent.keyDown(keysTab, { key: "ArrowRight" });
       expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
 
       fireEvent.keyDown(screen.getByRole("tab", { name: "Profile" }), { key: "ArrowLeft" });
-      fireEvent.keyDown(screen.getByRole("tab", { name: "Keys" }), { key: "ArrowLeft" });
+      fireEvent.keyDown(screen.getByRole("tab", { name: "API keys" }), { key: "ArrowLeft" });
       expect(screen.getByRole("tab", { name: "Danger" }).getAttribute("aria-selected")).toBe("true");
     });
 
@@ -105,7 +106,7 @@ describe("SettingsDrawer", () => {
     it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
+      for (const name of ["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]) {
         openTab(name);
         expect(screen.getByRole("dialog").textContent).not.toMatch(
           /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
@@ -118,7 +119,7 @@ describe("SettingsDrawer", () => {
       const palette =
         /(?:^|[\s:])(?:text|bg|ring|border|placeholder|divide|fill)-(?:zinc|sky|red|emerald|amber|orange|slate|gray|white|black)\b/;
 
-      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
+      for (const name of ["API keys", "Profile", "Audio", "Appearance", "Keybinds", "Danger"]) {
         openTab(name);
         const offenders = Array.from(screen.getByRole("dialog").querySelectorAll("[class]"))
           .map((el) => el.getAttribute("class") ?? "")
@@ -128,7 +129,7 @@ describe("SettingsDrawer", () => {
     });
   });
 
-  describe("Keys tab", () => {
+  describe("API keys tab", () => {
     it("saves keys to the backend and shows Saved", async () => {
       const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
@@ -222,6 +223,28 @@ describe("SettingsDrawer", () => {
         target: { value: "groq/some-model" },
       });
       expect(useSettingsStore.getState().evaluatorModel).toBe("groq/some-model");
+    });
+  });
+
+  describe("Keybinds tab", () => {
+    it("lists every shortcut with one key chip per key and marks the while-visible ones", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keybinds" />);
+
+      expect(screen.getByText(/only work while Sidekick is showing/)).toBeDefined();
+      for (const shortcut of SHORTCUTS) {
+        const row = screen.getByText(shortcut.label).closest("li") as HTMLElement;
+        const chips = Array.from(row.querySelectorAll("kbd")).map((kbd) => kbd.textContent);
+        expect(chips, shortcut.label).toEqual(shortcut.keys);
+        expect(row.textContent?.includes("while visible"), shortcut.label).toBe(shortcut.whileVisible);
+      }
+    });
+
+    it("groups the rows under a heading per group", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keybinds" />);
+
+      for (const group of ["General", "Window", "Scroll", "Options"]) {
+        expect(screen.getByRole("heading", { name: group })).toBeDefined();
+      }
     });
   });
 

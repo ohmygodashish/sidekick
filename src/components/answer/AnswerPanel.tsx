@@ -20,10 +20,40 @@ export const AnswerPanel: React.FC = () => {
 
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isAskOpen) inputRef.current?.focus();
   }, [isAskOpen]);
+
+  // ⇧⌘↑/↓ from Rust: a third of the visible answer, smooth unless the user asks for less motion
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ direction: "up" | "down" }>("sidekick://scroll_answer", (e) => {
+          const el = scrollRef.current;
+          if (!el) return;
+          const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const step = el.clientHeight / 3;
+          el.scrollBy({
+            top: e.payload.direction === "down" ? step : -step,
+            behavior: reduced ? "auto" : "smooth",
+          });
+        })
+      )
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const hasSolution = Boolean(stage1 || stage2 || stage3);
   if (!activeQuestion && !hasSolution && !isSolving && !solveError && !isAskOpen) return null;
@@ -31,10 +61,7 @@ export const AnswerPanel: React.FC = () => {
   const question = activeQuestion ? activeQuestion.extractedQuestion || activeQuestion.rawTranscript : "";
 
   const close = () => {
-    window.dispatchEvent(new Event("sidekick:cancel_solve"));
-    useSessionStore.getState().setActiveQuestion(null);
-    useSessionStore.getState().setSolution(null);
-    useSessionStore.setState({ solveError: null, pickedOption: null });
+    useSessionStore.getState().clearAnswer();
     setAskOpen(false);
   };
 
@@ -100,7 +127,9 @@ export const AnswerPanel: React.FC = () => {
       </div>
 
       {body && (
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3 pt-2 sk-scroll">{body}</div>
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3 pt-2 sk-scroll">
+          {body}
+        </div>
       )}
 
       <form
@@ -119,7 +148,7 @@ export const AnswerPanel: React.FC = () => {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              // Enter and Cmd+Enter both submit; the global shortcut ignores inputs
+              // Enter and Cmd+Enter both submit
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 submit();

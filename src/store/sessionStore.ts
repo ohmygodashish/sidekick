@@ -103,9 +103,11 @@ export interface SessionState {
       | null
   ) => void;
   clearSession: () => void;
+  // Ends the answer on screen (question, solution, error, picked option) and cancels a running solve
+  clearAnswer: () => void;
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+export const useSessionStore = create<SessionState>((set, get) => ({
   transcript: [],
   activeQuestion: null,
   stage1Intuition: null,
@@ -251,6 +253,13 @@ export const useSessionStore = create<SessionState>((set) => ({
       activeSolutionModel: raw.model ?? null,
       progressiveSolution,
     });
+  },
+
+  clearAnswer: () => {
+    window.dispatchEvent(new Event("sidekick:cancel_solve"));
+    get().setActiveQuestion(null);
+    get().setSolution(null);
+    set({ solveError: null, pickedOption: null });
   },
 
   clearSession: () =>

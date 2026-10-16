@@ -43,19 +43,10 @@ export default function App() {
       else cleanupFn = unlisten;
     });
 
-    const handleSettingsHotkey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        useSettingsStore.getState().toggleSettings();
-      }
-    };
-    window.addEventListener("keydown", handleSettingsHotkey);
-
     return () => {
       cancelled = true;
       unsubHydration?.();
       cleanupFn?.();
-      window.removeEventListener("keydown", handleSettingsHotkey);
     };
   }, [syncFromBackend]);
 

@@ -47,7 +47,7 @@ describe("HUDContainer", () => {
     render(<HUDContainer />);
 
     expect(screen.getByRole("toolbar", { name: "Sidekick controls" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Start listening" })).toBeDefined();
     expect(screen.getByRole("button", { name: /Ask/ })).toBeDefined();
     expect(screen.getByRole("button", { name: /Hide/ })).toBeDefined();
     expect(screen.getByRole("button", { name: "More options" })).toBeDefined();
@@ -56,13 +56,13 @@ describe("HUDContainer", () => {
   it("Start goes live, and Stop returns to idle", async () => {
     render(<HUDContainer />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start meeting" }));
-    const stop = await screen.findByRole("button", { name: "Stop meeting" });
+    fireEvent.click(screen.getByRole("button", { name: "Start listening" }));
+    const stop = await screen.findByRole("button", { name: "Stop listening" });
     expect(stop.textContent).toContain("0:00");
 
     fireEvent.click(stop);
     await waitFor(() => expect(useAppStore.getState().meetingStatus).toBe("idle"));
-    expect(screen.getByRole("button", { name: "Start meeting" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Start listening" })).toBeDefined();
   });
 
   it("live timer counts up every second and uses h:mm:ss after an hour", () => {
@@ -70,7 +70,7 @@ describe("HUDContainer", () => {
     useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() - 65_000 });
     render(<HUDContainer />);
 
-    const stop = () => screen.getByRole("button", { name: "Stop meeting" });
+    const stop = () => screen.getByRole("button", { name: "Stop listening" });
     expect(stop().textContent).toContain("1:05");
 
     act(() => vi.advanceTimersByTime(2000));

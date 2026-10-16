@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
+  Keyboard,
   KeyRound,
   LoaderCircle,
   Monitor,
@@ -27,8 +28,9 @@ import {
 import { ApiKeyInputs } from "./ApiKeyInputs";
 import { ProfileEditor } from "./ProfileEditor";
 import { cn } from "../../lib/utils";
+import { SHORTCUTS, type Shortcut } from "../../lib/shortcuts";
 
-export type SettingsTab = "keys" | "profile" | "audio" | "appearance" | "danger";
+export type SettingsTab = "keys" | "profile" | "audio" | "appearance" | "keybinds" | "danger";
 
 interface SettingsDrawerProps {
   isOpen?: boolean;
@@ -37,10 +39,11 @@ interface SettingsDrawerProps {
 }
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
-  { id: "keys", label: "Keys", icon: KeyRound },
+  { id: "keys", label: "API keys", icon: KeyRound },
   { id: "profile", label: "Profile", icon: User },
   { id: "audio", label: "Audio", icon: AudioLines },
   { id: "appearance", label: "Appearance", icon: SunMoon },
+  { id: "keybinds", label: "Keybinds", icon: Keyboard },
   { id: "danger", label: "Danger", icon: TriangleAlert },
 ];
 
@@ -55,6 +58,15 @@ const STT_OPTIONS: { id: SttMode; name: string; description: string }[] = [
   { id: "groq", name: "Groq cloud", description: "Fast cloud transcription. Needs a Groq key." },
   { id: "deepgram", name: "Deepgram streaming", description: "Live cloud streaming. Needs a Deepgram key." },
 ];
+
+// Keybinds tab: groups in the order they first appear in SHORTCUTS
+const SHORTCUT_GROUPS = Object.entries(
+  SHORTCUTS.reduce<Record<string, Shortcut[]>>((groups, shortcut) => {
+    groups[shortcut.group] ??= [];
+    groups[shortcut.group].push(shortcut);
+    return groups;
+  }, {})
+);
 
 const CONFIRM_MS = 3000;
 const CONFIRMED_MS = 2000;
@@ -232,7 +244,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         role="tablist"
         aria-label="Settings sections"
         onKeyDown={onTabKeyDown}
-        className="mx-3 grid grid-cols-5 gap-1 rounded-lg bg-sk-fill p-1"
+        className="mx-3 grid grid-cols-6 gap-1 rounded-lg bg-sk-fill p-1"
       >
         {TABS.map(({ id, label, icon: Icon }) => {
           const selected = id === activeTab;
@@ -300,7 +312,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </div>
               {sttKeyMissing && (
                 <p className="sk-meta">
-                  Add a {sttMode === "groq" ? "Groq" : "Deepgram"} key on the Keys tab to use this engine.
+                  Add a {sttMode === "groq" ? "Groq" : "Deepgram"} key on the API keys tab to use this engine.
                 </p>
               )}
             </div>
@@ -377,6 +389,38 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               })}
             </div>
             <p className="sk-meta">System follows your macOS appearance.</p>
+          </div>
+        )}
+
+        {activeTab === "keybinds" && (
+          <div className="space-y-4">
+            <p className="sk-meta">
+              Shortcuts marked “while visible” only work while Sidekick is showing, so other apps keep those keys
+              when it&apos;s hidden.
+            </p>
+            {SHORTCUT_GROUPS.map(([group, shortcuts]) => (
+              <div key={group} className="space-y-1.5">
+                <h3 className="sk-label">{group}</h3>
+                <ul className="space-y-1">
+                  {shortcuts.map((shortcut) => (
+                    <li
+                      key={shortcut.id}
+                      className="flex min-h-8 items-center gap-2 rounded-lg bg-sk-fill px-3 py-1.5 text-[13px] text-sk-fg-2"
+                    >
+                      <span className="min-w-0 flex-1">{shortcut.label}</span>
+                      {shortcut.whileVisible && <span className="sk-meta">while visible</span>}
+                      <span className="flex shrink-0 items-center gap-1">
+                        {shortcut.keys.map((key) => (
+                          <kbd key={key} className="sk-kbd">
+                            {key}
+                          </kbd>
+                        ))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         )}
 

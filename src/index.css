@@ -48,6 +48,11 @@ body,
   --sk-warn: #fcd34d;
   --sk-success: #6ee7b7;
 
+  /* Hover hints under the pill: a dark label in both themes */
+  --sk-tip: #27272a;
+  --sk-tip-fg: #f4f4f5;
+  --sk-tip-key: rgb(255 255 255 / 0.14);
+
   /* Audio sources: system audio and the microphone */
   --sk-system: #38bdf8;
   --sk-mic: #fb923c;
@@ -90,6 +95,10 @@ body,
   --sk-danger-solid-hover: #b91c1c;
   --sk-warn: #b45309;
   --sk-success: #047857;
+
+  --sk-tip: #18181b;
+  --sk-tip-fg: #fafafa;
+  --sk-tip-key: rgb(255 255 255 / 0.16);
 
   --sk-system: #0284c7;
   --sk-mic: #ea580c;
@@ -136,6 +145,43 @@ body,
   }
   .sk-menu {
     @apply sk-surface rounded-xl p-1;
+  }
+
+  /*
+   * Hover hint (Tip.tsx). Shows on hover or keyboard focus after 400 ms; hides at once on leave.
+   * Not a surface: it is outside the hit regions and never takes pointer events.
+   */
+  .sk-tip-host > .sk-tip {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    background-color: var(--sk-tip);
+    color: var(--sk-tip-fg);
+    box-shadow: var(--sk-shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms var(--sk-ease) 0ms;
+  }
+  .sk-tip-host:hover > .sk-tip,
+  .sk-tip-host:has(:focus-visible) > .sk-tip {
+    opacity: 1;
+    transition-delay: 400ms;
+  }
+  .sk-tip-host > .sk-tip .sk-kbd {
+    background-color: var(--sk-tip-key);
+    color: var(--sk-tip-fg);
   }
 
   /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
@@ -233,6 +279,9 @@ body,
   .sk-pop,
   .sk-pop[data-state="closed"] {
     transform: none;
+  }
+  .sk-tip-host > .sk-tip {
+    transition-duration: 0ms;
   }
   /* No press-scale either; colour and opacity feedback remain */
   *:active {

@@ -3,7 +3,9 @@ import { EyeOff, LoaderCircle, Mic, Sparkles } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { BarMenu } from "./BarMenu";
+import { Tip } from "./Tip";
 import { cn } from "../../lib/utils";
+import { getShortcut } from "../../lib/shortcuts";
 
 // m:ss under an hour, h:mm:ss after
 function formatElapsed(ms: number): string {
@@ -70,18 +72,23 @@ const MeetingButton: React.FC = () => {
 
   // One button with a fixed minimum width, so the bar never changes size between states
   return (
-    <button
-      type="button"
-      className="sk-btn min-w-[132px] justify-center"
+    <Tip
+      label={isLive ? "Stop listening" : "Start listening"}
+      keys={getShortcut("toggle_listening").keys}
       disabled={isBusy}
-      aria-label={isLive ? "Stop meeting" : isBusy ? undefined : "Start meeting"}
-      title={!isLive && !isBusy ? "Start listening to the meeting" : undefined}
-      onClick={() => (isLive ? stopMeeting() : startMeeting())}
     >
-      <span key={meetingStatus} className="sk-fade inline-flex items-center gap-1.5">
-        {content}
-      </span>
-    </button>
+      <button
+        type="button"
+        className="sk-btn min-w-[132px] justify-center"
+        disabled={isBusy}
+        aria-label={isLive ? "Stop listening" : isBusy ? undefined : "Start listening"}
+        onClick={() => (isLive ? stopMeeting() : startMeeting())}
+      >
+        <span key={meetingStatus} className="sk-fade inline-flex items-center gap-1.5">
+          {content}
+        </span>
+      </button>
+    </Tip>
   );
 };
 
@@ -91,6 +98,7 @@ export const ControlBar: React.FC = () => {
   const setAskOpen = useAppStore((state) => state.setAskOpen);
   const hideWindow = useAppStore((state) => state.hideWindow);
   const isClickThrough = useAppStore((state) => state.isClickThrough);
+  const showHide = getShortcut("show_hide");
 
   // Ask opens a typed question; live options are picked with Cmd+Option+1/2/3
   const handleAsk = () => {
@@ -110,15 +118,19 @@ export const ControlBar: React.FC = () => {
     >
       <MeetingButton />
       <span className="sk-sep" aria-hidden="true" />
-      <button type="button" className="sk-btn" onClick={handleAsk}>
-        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-        Ask
-      </button>
-      <button type="button" className="sk-btn" onClick={() => hideWindow()}>
-        <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-        Hide
-        <kbd className="sk-kbd">⌘⇧Space</kbd>
-      </button>
+      <Tip label="Ask a question">
+        <button type="button" className="sk-btn" onClick={handleAsk}>
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+          Ask
+        </button>
+      </Tip>
+      <Tip label="Hide" keys={showHide.keys}>
+        <button type="button" className="sk-btn" onClick={() => hideWindow()}>
+          <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+          Hide
+          <kbd className="sk-kbd">{showHide.keys.join("")}</kbd>
+        </button>
+      </Tip>
       <span className="sk-sep" aria-hidden="true" />
       <BarMenu />
     </div>

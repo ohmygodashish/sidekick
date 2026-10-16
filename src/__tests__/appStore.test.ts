@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useAppStore, setupAppEventListeners } from "../store/appStore";
+import { useAppStore, setupAppEventListeners, toggleMeeting } from "../store/appStore";
+import { useSessionStore } from "../store/sessionStore";
+import { useSettingsStore } from "../store/settingsStore";
 
 describe("useAppStore", () => {
   beforeEach(() => {
@@ -86,6 +88,60 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().isVisible).toBe(false);
   });
 
+  describe("toggleMeeting (Shift + Cmd + \\)", () => {
+    it("starts when idle, stops when live, and ignores starting and stopping", async () => {
+      await toggleMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("live");
+
+      await toggleMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("idle");
+
+      useAppStore.setState({ meetingStatus: "starting" });
+      await toggleMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("starting");
+
+      useAppStore.setState({ meetingStatus: "stopping" });
+      await toggleMeeting();
+      expect(useAppStore.getState().meetingStatus).toBe("stopping");
+    });
+  });
+
+  it("maps the toggle_meeting, open_settings and new_chat events to their actions", async () => {
+    const handlers = new Map<string, (event: any) => void>();
+    vi.doMock("@tauri-apps/api/event", () => ({
+      listen: vi.fn(async (eventName: string, handler: (e: any) => void) => {
+        handlers.set(eventName, handler);
+        return () => handlers.delete(eventName);
+      }),
+    }));
+
+    useSettingsStore.setState({ isSettingsOpen: false });
+    useSessionStore.getState().setActiveQuestion({
+      questionId: "q_2",
+      timestamp: 2000,
+      confidence: 1,
+      rawTranscript: "Explain Raft",
+      extractedQuestion: "Explain Raft",
+      quickPointers: [],
+    });
+    useAppStore.setState({ isAskOpen: true, meetingStatus: "idle" });
+
+    const unlisten = await setupAppEventListeners();
+
+    handlers.get("sidekick://open_settings")!({ payload: {} });
+    expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
+
+    handlers.get("sidekick://new_chat")!({ payload: {} });
+    expect(useSessionStore.getState().activeQuestion).toBeNull();
+    expect(useAppStore.getState().isAskOpen).toBe(false);
+
+    handlers.get("sidekick://toggle_meeting")!({ payload: {} });
+    await vi.waitFor(() => expect(useAppStore.getState().meetingStatus).toBe("live"));
+
+    unlisten();
+    vi.doUnmock("@tauri-apps/api/event");
+  });
+
   it("should setup event listeners and unlisten without throwing", async () => {
     const unlisten = await setupAppEventListeners();
     expect(typeof unlisten).toBe("function");
@@ -126,7 +182,15 @@ describe("useAppStore", () => {
   // Keep last: it resets the module registry.
   it("calls the backend inside Tauri and reports a refused start", async () => {
     vi.resetModules();
-    const invoke = vi.fn().mockRejectedValueOnce("Screen Recording permission denied");
+    // Only the first start is refused; other commands (settings hydration runs on import) succeed
+    let refuseStart = true;
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "start_audio_capture" && refuseStart) {
+        refuseStart = false;
+        throw "Screen Recording permission denied";
+      }
+      return null;
+    });
     vi.doMock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke }));
     const { useAppStore: store } = await import("../store/appStore");
 
@@ -135,7 +199,6 @@ describe("useAppStore", () => {
     expect(store.getState().meetingStatus).toBe("idle");
     expect(store.getState().meetingError).toContain("permission");
 
-    invoke.mockResolvedValue(undefined);
     await store.getState().startMeeting();
     expect(store.getState().meetingStatus).toBe("live");
     expect(store.getState().meetingError).toBeNull();

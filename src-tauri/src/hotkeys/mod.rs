@@ -2,9 +2,11 @@
 //!
 //! Provides OS-level global keyboard shortcuts and Tauri IPC commands for:
 //! - Panic Killswitch (`Cmd + Esc` / `Super + Escape`): Synchronously hides window, sets panic state, emits `sidekick://panic`, deletes the session DB, then quits the process.
-//! - Window Visibility Toggle (`Cmd + Shift + Space` / `Super + Shift + Space`): Shows without taking focus, or hides and hands focus back.
+//! - Window Visibility Toggle (`Cmd + Backslash` / `Super + Backslash`): Shows without taking focus, or hides and hands focus back.
+//! - Meeting Toggle (`Cmd + Shift + Backslash`): Emits `sidekick://toggle_meeting` so the frontend starts or stops listening.
 //! - Click-Through Toggle (`Cmd + Shift + C` / `Super + Shift + C`): Enables mouse pass-through to underlying apps.
 //! - Layout Mode Toggle (`Cmd + Shift + M` / `Super + Shift + M`): Toggles compact view (control bar only) on and off.
+//! - Visible-only shortcuts (`Cmd + Comma`, `Cmd + R`, `Cmd + Arrows`, `Cmd + Shift + Up/Down`): Registered only while the window is visible, so other apps keep these keys while Sidekick is hidden. Open Settings, new chat, move the window, scroll the answer.
 //! - Opacity Configuration: Controls window alpha level.
 
 use std::str::FromStr;
@@ -16,15 +18,35 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 pub use tauri_plugin_global_shortcut::{
     Code, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// Default shortcut string representations
 pub const SHORTCUT_PANIC: &str = "Super+Escape";
-pub const SHORTCUT_TOGGLE_VISIBILITY: &str = "Super+Shift+Space";
+pub const SHORTCUT_TOGGLE_VISIBILITY: &str = "Super+Backslash";
+pub const SHORTCUT_TOGGLE_MEETING: &str = "Super+Shift+Backslash";
 pub const SHORTCUT_TOGGLE_CLICK_THROUGH: &str = "Super+Shift+C";
 pub const SHORTCUT_TOGGLE_LAYOUT_MODE: &str = "Super+Shift+M";
-pub const SHORTCUT_CAPTURE_ACTIVE_WINDOW: &str = "Super+Shift+S";
 /// Cmd+Option+1/2/3 pick a live option; browsers own Cmd+1-9 and Cmd+Shift+3 is a screenshot
 pub const SHORTCUT_PICK_OPTIONS: [&str; 3] = ["Super+Alt+Digit1", "Super+Alt+Digit2", "Super+Alt+Digit3"];
+/// Only registered while the window is visible (see `set_visible_shortcuts`)
+pub const SHORTCUT_OPEN_SETTINGS: &str = "Super+Comma";
+pub const SHORTCUT_NEW_CHAT: &str = "Super+KeyR";
+pub const SHORTCUT_MOVE_UP: &str = "Super+ArrowUp";
+pub const SHORTCUT_MOVE_DOWN: &str = "Super+ArrowDown";
+pub const SHORTCUT_MOVE_LEFT: &str = "Super+ArrowLeft";
+pub const SHORTCUT_MOVE_RIGHT: &str = "Super+ArrowRight";
+pub const SHORTCUT_SCROLL_UP: &str = "Super+Shift+ArrowUp";
+pub const SHORTCUT_SCROLL_DOWN: &str = "Super+Shift+ArrowDown";
+pub const VISIBLE_ONLY_SHORTCUTS: [&str; 8] = [
+    SHORTCUT_OPEN_SETTINGS,
+    SHORTCUT_NEW_CHAT,
+    SHORTCUT_MOVE_UP,
+    SHORTCUT_MOVE_DOWN,
+    SHORTCUT_MOVE_LEFT,
+    SHORTCUT_MOVE_RIGHT,
+    SHORTCUT_SCROLL_UP,
+    SHORTCUT_SCROLL_DOWN,
+];
 
 /// Event names emitted to frontend
 pub const EVENT_PANIC: &str = "sidekick://panic";
@@ -34,6 +56,10 @@ pub const EVENT_TOGGLE_LAYOUT_MODE: &str = "sidekick://toggle_layout_mode";
 pub const EVENT_OPACITY_CHANGED: &str = "sidekick://opacity_changed";
 pub const EVENT_ACTIVE_WINDOW_CAPTURED: &str = "sidekick://active_window_captured";
 pub const EVENT_PICK_OPTION: &str = "sidekick://pick_option";
+pub const EVENT_TOGGLE_MEETING: &str = "sidekick://toggle_meeting";
+pub const EVENT_OPEN_SETTINGS: &str = "sidekick://open_settings";
+pub const EVENT_NEW_CHAT: &str = "sidekick://new_chat";
+pub const EVENT_SCROLL_ANSWER: &str = "sidekick://scroll_answer";
 
 /// Layout display modes supported by Sidekick
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,34 +117,58 @@ pub enum SidekickAction {
     Panic,
     /// Toggle window visibility (show without focus if hidden, hide and release focus if visible)
     ToggleVisibility,
+    /// Start or stop listening (the frontend handles `sidekick://toggle_meeting`)
+    ToggleMeeting,
     /// Toggle mouse cursor transparency / event passthrough
     ToggleClickThrough,
     /// Toggle layout mode between Floating HUD and Dynamic Notch
     ToggleLayoutMode,
-    /// Silently capture frontmost active application window
-    CaptureActiveWindow,
     /// Index 0-2 of the live option to answer
     PickOption(u8),
+    /// Open or close the Settings drawer (visible only)
+    OpenSettings,
+    /// Clear the answer (visible only)
+    NewChat,
+    /// Move the window one step; each component is -1, 0 or 1 (visible only)
+    MoveWindow(i32, i32),
+    /// Scroll the answer, up when true (visible only)
+    ScrollAnswer(bool),
 }
 
 /// Resolves a parsed `Shortcut` into the matching `SidekickAction`
 pub fn resolve_action(shortcut: &Shortcut) -> Option<SidekickAction> {
     if shortcut.matches(Modifiers::SUPER, Code::Escape) {
         Some(SidekickAction::Panic)
-    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Space) {
+    } else if shortcut.matches(Modifiers::SUPER, Code::Backslash) {
         Some(SidekickAction::ToggleVisibility)
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Backslash) {
+        Some(SidekickAction::ToggleMeeting)
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyC) {
         Some(SidekickAction::ToggleClickThrough)
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyM) {
         Some(SidekickAction::ToggleLayoutMode)
-    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyS) {
-        Some(SidekickAction::CaptureActiveWindow)
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit1) {
         Some(SidekickAction::PickOption(0))
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit2) {
         Some(SidekickAction::PickOption(1))
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit3) {
         Some(SidekickAction::PickOption(2))
+    } else if shortcut.matches(Modifiers::SUPER, Code::Comma) {
+        Some(SidekickAction::OpenSettings)
+    } else if shortcut.matches(Modifiers::SUPER, Code::KeyR) {
+        Some(SidekickAction::NewChat)
+    } else if shortcut.matches(Modifiers::SUPER, Code::ArrowUp) {
+        Some(SidekickAction::MoveWindow(0, -1))
+    } else if shortcut.matches(Modifiers::SUPER, Code::ArrowDown) {
+        Some(SidekickAction::MoveWindow(0, 1))
+    } else if shortcut.matches(Modifiers::SUPER, Code::ArrowLeft) {
+        Some(SidekickAction::MoveWindow(-1, 0))
+    } else if shortcut.matches(Modifiers::SUPER, Code::ArrowRight) {
+        Some(SidekickAction::MoveWindow(1, 0))
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::ArrowUp) {
+        Some(SidekickAction::ScrollAnswer(true))
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::ArrowDown) {
+        Some(SidekickAction::ScrollAnswer(false))
     } else {
         None
     }
@@ -180,6 +230,9 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
                     eprintln!("[Sidekick Hotkeys] Failed to toggle visibility: {e}");
                 }
             }
+            SidekickAction::ToggleMeeting => {
+                let _ = app.emit(EVENT_TOGGLE_MEETING, serde_json::json!({}));
+            }
             SidekickAction::ToggleClickThrough => {
                 if let Err(e) = toggle_click_through(app, &state) {
                     eprintln!("[Sidekick Hotkeys] Failed to toggle click-through: {e}");
@@ -190,18 +243,20 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
                     eprintln!("[Sidekick Hotkeys] Failed to toggle layout mode: {e}");
                 }
             }
-            SidekickAction::CaptureActiveWindow => {
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    match crate::capture::capture_frontmost_window() {
-                        Ok(capture) => {
-                            let _ = app_handle.emit(EVENT_ACTIVE_WINDOW_CAPTURED, &capture);
-                        }
-                        Err(e) => {
-                            eprintln!("[Sidekick Hotkeys] Failed to capture active window: {e}");
-                        }
-                    }
-                });
+            SidekickAction::OpenSettings => {
+                let _ = app.emit(EVENT_OPEN_SETTINGS, serde_json::json!({}));
+            }
+            SidekickAction::NewChat => {
+                let _ = app.emit(EVENT_NEW_CHAT, serde_json::json!({}));
+            }
+            SidekickAction::MoveWindow(dx, dy) => {
+                if let Err(e) = move_window_by(app, dx, dy) {
+                    eprintln!("[Sidekick Hotkeys] Failed to move window: {e}");
+                }
+            }
+            SidekickAction::ScrollAnswer(up) => {
+                let direction = if up { "up" } else { "down" };
+                let _ = app.emit(EVENT_SCROLL_ANSWER, serde_json::json!({ "direction": direction }));
             }
             SidekickAction::PickOption(index) => {
                 // The answer must be visible, so summon a hidden overlay first
@@ -226,7 +281,8 @@ pub fn trigger_panic<R: Runtime>(
     app: &AppHandle<R>,
     state: &HotkeyState,
 ) -> Result<(), String> {
-    // 1. Immediately and synchronously hide the main window (< 1ms) and hand focus back
+    // 1. Immediately and synchronously hide the main window (< 1ms) and hand focus back.
+    // Visible-only shortcuts aren't unregistered: the process exits right after and frees them.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
         let _ = crate::appkit::release_key_focus(&window);
@@ -274,6 +330,7 @@ pub fn hide_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "Main window 'main' not found".to_string())?;
     window.hide().map_err(|e| e.to_string())?;
+    set_visible_shortcuts(app, false);
     // Non-fatal: the window is already hidden, so the visibility event must still go out
     let _ = crate::appkit::release_key_focus(&window);
     let _ = app.emit(
@@ -298,6 +355,7 @@ pub fn toggle_window_visibility<R: Runtime>(
             // Reset panic state when summoning the overlay
             state.is_panicked.store(false, Ordering::SeqCst);
             crate::appkit::show_without_activating(&window).map_err(|e| e.to_string())?;
+            set_visible_shortcuts(app, true);
             let _ = app.emit(
                 EVENT_VISIBILITY_TOGGLED,
                 serde_json::json!({ "visible": true }),
@@ -307,6 +365,73 @@ pub fn toggle_window_visibility<R: Runtime>(
     } else {
         Err("Main window 'main' not found".to_string())
     }
+}
+
+/// Registers the visible-only shortcuts when the window shows and releases them when it hides, so
+/// the focused app keeps ⌘, ⌘R, ⌘←/→ and ⇧⌘↑/↓ while Sidekick is hidden.
+pub fn set_visible_shortcuts<R: Runtime>(app: &AppHandle<R>, visible: bool) {
+    let shortcuts = app.global_shortcut();
+    for raw in VISIBLE_ONLY_SHORTCUTS {
+        // Skip keys already in the requested state, so a second show or hide never fails
+        if shortcuts.is_registered(raw) == visible {
+            continue;
+        }
+        let result = if visible {
+            shortcuts.register(raw)
+        } else {
+            shortcuts.unregister(raw)
+        };
+        if let Err(e) = result {
+            // Another app may own the key; the other shortcuts still work
+            let action = if visible { "register" } else { "unregister" };
+            eprintln!("[Sidekick Hotkeys] Failed to {action} {raw}: {e}");
+        }
+    }
+}
+
+/// Moves the main window one step (48 pt) in a direction. `dx` and `dy` are -1, 0 or 1. The move
+/// is clamped to the work area, and the top of the window (the pill) stays on screen.
+pub fn move_window_by<R: Runtime>(app: &AppHandle<R>, dx: i32, dy: i32) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window 'main' not found".to_string())?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .or(window.primary_monitor().map_err(|e| e.to_string())?)
+        .ok_or("No monitor found")?;
+    let scale = monitor.scale_factor();
+    let step = (48.0 * scale).round() as i32;
+    let min_visible = (80.0 * scale).round() as i32;
+    let area = monitor.work_area();
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let width = window.outer_size().map_err(|e| e.to_string())?.width;
+    let (x, y) = clamp_position(
+        position.x + dx * step,
+        position.y + dy * step,
+        width as i32,
+        (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32),
+        min_visible,
+    );
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Clamps a window origin to a work area `(x, y, width, height)`. The left and right edges stay
+/// inside it, and the top stays inside with at least `min_visible` px above the bottom edge. A
+/// window wider than the area is pinned to the area's left edge.
+fn clamp_position(
+    x: i32,
+    y: i32,
+    win_w: i32,
+    area: (i32, i32, i32, i32),
+    min_visible: i32,
+) -> (i32, i32) {
+    let (area_x, area_y, area_w, area_h) = area;
+    let x = x.min(area_x + area_w - win_w).max(area_x);
+    let y = y.min(area_y + area_h - min_visible).max(area_y);
+    (x, y)
 }
 
 /// Sets whether mouse clicks ignore the overlay window. The `hit_region` poller applies it
@@ -541,8 +666,17 @@ mod tests {
         let s1: Shortcut = SHORTCUT_TOGGLE_VISIBILITY.parse().expect("Failed to parse visibility shortcut");
         assert_eq!(resolve_action(&s1), Some(SidekickAction::ToggleVisibility));
 
-        let s2: Shortcut = "Cmd+Shift+Space".parse().expect("Failed to parse Cmd+Shift+Space");
+        let s2: Shortcut = "Cmd+Backslash".parse().expect("Failed to parse Cmd+Backslash");
         assert_eq!(resolve_action(&s2), Some(SidekickAction::ToggleVisibility));
+    }
+
+    #[test]
+    fn test_resolve_action_toggle_meeting() {
+        let s1: Shortcut = SHORTCUT_TOGGLE_MEETING.parse().expect("Failed to parse meeting shortcut");
+        assert_eq!(resolve_action(&s1), Some(SidekickAction::ToggleMeeting));
+
+        let s2: Shortcut = "Cmd+Shift+Backslash".parse().expect("Failed to parse Cmd+Shift+Backslash");
+        assert_eq!(resolve_action(&s2), Some(SidekickAction::ToggleMeeting));
     }
 
     #[test]
@@ -575,15 +709,61 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_action_capture_active_window() {
-        let s1: Shortcut = SHORTCUT_CAPTURE_ACTIVE_WINDOW.parse().expect("Failed to parse capture shortcut");
-        assert_eq!(resolve_action(&s1), Some(SidekickAction::CaptureActiveWindow));
+    fn test_resolve_action_visible_only() {
+        let cases = [
+            (SHORTCUT_OPEN_SETTINGS, SidekickAction::OpenSettings),
+            (SHORTCUT_NEW_CHAT, SidekickAction::NewChat),
+            (SHORTCUT_MOVE_UP, SidekickAction::MoveWindow(0, -1)),
+            (SHORTCUT_MOVE_DOWN, SidekickAction::MoveWindow(0, 1)),
+            (SHORTCUT_MOVE_LEFT, SidekickAction::MoveWindow(-1, 0)),
+            (SHORTCUT_MOVE_RIGHT, SidekickAction::MoveWindow(1, 0)),
+            (SHORTCUT_SCROLL_UP, SidekickAction::ScrollAnswer(true)),
+            (SHORTCUT_SCROLL_DOWN, SidekickAction::ScrollAnswer(false)),
+        ];
+        for (raw, expected) in cases {
+            assert!(VISIBLE_ONLY_SHORTCUTS.contains(&raw), "{raw} missing from VISIBLE_ONLY_SHORTCUTS");
+            let s: Shortcut = raw.parse().expect("Failed to parse visible-only shortcut");
+            assert_eq!(resolve_action(&s), Some(expected), "{raw}");
+        }
 
-        let s2: Shortcut = "Cmd+Shift+S".parse().expect("Failed to parse Cmd+Shift+S");
-        assert_eq!(resolve_action(&s2), Some(SidekickAction::CaptureActiveWindow));
+        // Modifiers must match exactly: Shift+Left is not bound, and Cmd+Up is not Cmd+Shift+Up
+        let shift_left: Shortcut = "Cmd+Shift+ArrowLeft".parse().expect("Failed to parse Cmd+Shift+ArrowLeft");
+        assert_eq!(resolve_action(&shift_left), None);
+    }
 
-        let s3: Shortcut = "Super+Shift+KeyS".parse().expect("Failed to parse Super+Shift+KeyS");
-        assert_eq!(resolve_action(&s3), Some(SidekickAction::CaptureActiveWindow));
+    #[test]
+    fn test_resolve_action_removed_shortcuts() {
+        // Super+Shift+Space is replaced by Super+Backslash; the focused app keeps these keys
+        let old_visibility: Shortcut = "Super+Shift+Space".parse().expect("Failed to parse Super+Shift+Space");
+        assert_eq!(resolve_action(&old_visibility), None);
+        let capture: Shortcut = "Super+Shift+KeyS".parse().expect("Failed to parse Super+Shift+KeyS");
+        assert_eq!(resolve_action(&capture), None);
+    }
+
+    #[test]
+    fn test_clamp_position_within_bounds_is_unchanged() {
+        let area = (0, 25, 1440, 875);
+        assert_eq!(clamp_position(100, 100, 300, area, 80), (100, 100));
+        assert_eq!(clamp_position(0, 25, 300, area, 80), (0, 25));
+    }
+
+    #[test]
+    fn test_clamp_position_stops_at_each_edge() {
+        let area = (0, 25, 1000, 800);
+        // Left and top edges of the work area
+        assert_eq!(clamp_position(-48, 100, 300, area, 80), (0, 100));
+        assert_eq!(clamp_position(100, -20, 300, area, 80), (100, 25));
+        // Right edge: the window's right side meets the area's right side
+        assert_eq!(clamp_position(800, 100, 300, area, 80), (700, 100));
+        // Bottom: the top edge may go no lower than 80 px above the area's bottom (825 - 80)
+        assert_eq!(clamp_position(100, 790, 300, area, 80), (100, 745));
+    }
+
+    #[test]
+    fn test_clamp_position_window_wider_than_area() {
+        // Pinned to the area's left edge rather than oscillating or going negative
+        assert_eq!(clamp_position(50, 0, 1200, (0, 0, 1000, 800), 80), (0, 0));
+        assert_eq!(clamp_position(500, 0, 1200, (100, 40, 1000, 800), 80), (100, 40));
     }
 
     #[test]

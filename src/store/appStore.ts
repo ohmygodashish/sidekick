@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invokeInTauri, safeInvoke } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
+import { useSettingsStore } from "./settingsStore";
 
 // "dynamic_notch" now means compact view (bar only); the name is kept for Rust and saved settings.
 export type LayoutMode = "floating_hud" | "dynamic_notch";
@@ -157,6 +158,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 }));
 
+/** Start when idle, stop when live (⇧⌘\). While starting or stopping there is nothing to do. */
+export async function toggleMeeting(): Promise<void> {
+  const { meetingStatus, startMeeting, stopMeeting } = useAppStore.getState();
+  if (meetingStatus === "live") await stopMeeting();
+  else if (meetingStatus === "idle") await startMeeting();
+}
+
 /**
  * Subscribes to Tauri backend events to synchronize hotkeys and window state.
  * Returns an unlisten function for cleanup on component unmount.
@@ -177,7 +185,7 @@ export async function setupAppEventListeners(): Promise<() => void> {
     );
     unlisteners.push(unlistenPanic);
 
-    // 2. Visibility toggled event (Cmd + Shift + Space)
+    // 2. Visibility toggled event (Cmd + \)
     const handleVisibility = (payload: { visible: boolean }) => {
       useAppStore.setState({
         isVisible: payload.visible,
@@ -270,6 +278,25 @@ export async function setupAppEventListeners(): Promise<() => void> {
       }
     );
     unlisteners.push(unlistenBurned);
+
+    // 8. Start or stop listening (Shift + Cmd + \)
+    const unlistenToggle = await listen("sidekick://toggle_meeting", () => {
+      void toggleMeeting();
+    });
+    unlisteners.push(unlistenToggle);
+
+    // 9. Settings (Cmd + ,)
+    const unlistenSettings = await listen("sidekick://open_settings", () => {
+      useSettingsStore.getState().toggleSettings();
+    });
+    unlisteners.push(unlistenSettings);
+
+    // 10. New chat (Cmd + R): clears the answer and closes Ask, as the panel's Close does
+    const unlistenNewChat = await listen("sidekick://new_chat", () => {
+      useSessionStore.getState().clearAnswer();
+      useAppStore.getState().setAskOpen(false);
+    });
+    unlisteners.push(unlistenNewChat);
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.warn("[Sidekick Events] Failed to bind Tauri event listeners:", err);

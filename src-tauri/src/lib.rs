@@ -66,9 +66,9 @@ pub fn run() {
         .with_shortcuts([
             hotkeys::SHORTCUT_PANIC,
             hotkeys::SHORTCUT_TOGGLE_VISIBILITY,
+            hotkeys::SHORTCUT_TOGGLE_MEETING,
             hotkeys::SHORTCUT_TOGGLE_CLICK_THROUGH,
             hotkeys::SHORTCUT_TOGGLE_LAYOUT_MODE,
-            hotkeys::SHORTCUT_CAPTURE_ACTIVE_WINDOW,
             hotkeys::SHORTCUT_PICK_OPTIONS[0],
             hotkeys::SHORTCUT_PICK_OPTIONS[1],
             hotkeys::SHORTCUT_PICK_OPTIONS[2],
@@ -137,6 +137,7 @@ pub fn run() {
             if dev_visible {
                 if let Some(main_window) = app.get_webview_window("main") {
                     appkit::show_without_activating(&main_window)?;
+                    hotkeys::set_visible_shortcuts(app.handle(), true);
                 }
             }
 

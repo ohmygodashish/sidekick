@@ -12,13 +12,15 @@ import type { LucideIcon } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { OpacityControl } from "./OpacityControl";
+import { Tip } from "./Tip";
 import { cn } from "../../lib/utils";
 import { usePresence } from "../../hooks/usePresence";
+import { getShortcut, type ShortcutId } from "../../lib/shortcuts";
 
 interface MenuItemProps {
   icon: LucideIcon;
   label: string;
-  shortcut: string;
+  shortcut: ShortcutId;
   onSelect: () => void;
   checked?: boolean; // only for checkbox items
   danger?: boolean;
@@ -42,7 +44,7 @@ const MenuItem: React.FC<MenuItemProps> = ({
     <Icon className={cn("h-3.5 w-3.5", danger ? "text-sk-danger" : "text-sk-fg-3")} aria-hidden="true" />
     <span className="flex-1">{label}</span>
     {checked && <Check className="h-3.5 w-3.5 text-sk-accent" aria-hidden="true" />}
-    <kbd className="sk-kbd">{shortcut}</kbd>
+    <kbd className="sk-kbd">{getShortcut(shortcut).keys.join("")}</kbd>
   </button>
 );
 
@@ -112,18 +114,19 @@ export const BarMenu: React.FC = () => {
 
   return (
     <div ref={rootRef} className="relative" onKeyDown={handleKeyDown}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="sk-icon-btn"
-        aria-label="More options"
-        title="More options"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Ellipsis className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
+      <Tip label="More options" disabled={open}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="sk-icon-btn"
+          aria-label="More options"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          <Ellipsis className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </Tip>
 
       {menu.mounted && (
         <div
@@ -148,28 +151,28 @@ export const BarMenu: React.FC = () => {
           <MenuItem
             icon={Minimize2}
             label="Compact view"
-            shortcut="⌘⇧M"
+            shortcut="compact_view"
             checked={layoutMode === "dynamic_notch"}
             onSelect={choose(toggleLayoutMode)}
           />
           <MenuItem
             icon={MousePointerClick}
             label="Click-through"
-            shortcut="⌘⇧C"
+            shortcut="click_through"
             checked={isClickThrough}
             onSelect={choose(toggleClickThrough)}
           />
           <MenuItem
             icon={Settings}
             label="Settings"
-            shortcut="⌘,"
+            shortcut="open_settings"
             onSelect={choose(toggleSettings)}
           />
           <div role="separator" className="my-1 h-px bg-sk-line" />
           <MenuItem
             icon={OctagonX}
-            label="Panic"
-            shortcut="⌘Esc"
+            label="Panic: wipe and quit"
+            shortcut="panic"
             danger
             onSelect={choose(triggerPanic)}
           />

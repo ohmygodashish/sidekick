@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSessionStore } from "../store/sessionStore";
 
 describe("useSessionStore", () => {
@@ -126,5 +126,49 @@ describe("useSessionStore", () => {
 
     expect(useSessionStore.getState().transcript.length).toBe(0);
     expect(useSessionStore.getState().stage1Intuition).toBeNull();
+  });
+});
+
+describe("clearAnswer", () => {
+  beforeEach(() => {
+    useSessionStore.getState().clearSession();
+  });
+
+  it("clears the answer on screen and cancels a running solve, but keeps the transcript", () => {
+    const cancel = vi.fn();
+    window.addEventListener("sidekick:cancel_solve", cancel);
+
+    const store = useSessionStore.getState();
+    store.addTranscriptTurn({ speaker: "interviewer", text: "Explain Paxos.", timestamp: 1000 });
+    store.setActiveQuestion({
+      questionId: "q_1",
+      timestamp: 1000,
+      confidence: 1,
+      rawTranscript: "Explain Paxos.",
+      extractedQuestion: "Explain Paxos",
+      quickPointers: [],
+    });
+    store.setSolution({
+      questionId: "q_1",
+      stage1Intuition: { verbalSummary: "Quorums", keyTradeoffs: [] },
+      stage2Code: null,
+      stage3Analysis: null,
+    });
+    useSessionStore.setState({ solveError: "Timed out", pickedOption: "Explain Paxos" });
+
+    useSessionStore.getState().clearAnswer();
+
+    const state = useSessionStore.getState();
+    expect(state.activeQuestion).toBeNull();
+    expect(state.stage1Intuition).toBeNull();
+    expect(state.stage2Code).toBeNull();
+    expect(state.stage3Analysis).toBeNull();
+    expect(state.progressiveSolution).toBeNull();
+    expect(state.solveError).toBeNull();
+    expect(state.pickedOption).toBeNull();
+    expect(state.transcript).toHaveLength(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener("sidekick:cancel_solve", cancel);
   });
 });
