@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useRef } from "react";
 import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
+import { useHitRegions } from "../../hooks/useHitRegions";
 import { ControlBar } from "./ControlBar";
 import { AnswerPanel } from "../answer/AnswerPanel";
 import { SettingsDrawer } from "../settings/SettingsDrawer";
@@ -11,10 +12,21 @@ export const HUDContainer: React.FC = () => {
   // stopMeeting keeps the status "live" when stopping fails
   const stopFailed = useAppStore((state) => state.meetingStatus === "live");
   const isSettingsOpen = useSettingsStore((state) => state.isSettingsOpen);
+  const isClickThrough = useAppStore((state) => state.isClickThrough);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useHitRegions(rootRef);
 
   return (
-    <div className="flex h-full w-full flex-col items-center gap-2 px-4 pb-4 pt-2">
+    <div
+      ref={rootRef}
+      className="flex h-full w-full flex-col items-center gap-2 p-2"
+    >
       <ControlBar />
+      {isClickThrough && (
+        <p className="sk-surface rounded-full px-3 py-1.5 text-[12px] text-amber-300">
+          Click-through on · <kbd className="sk-kbd">⌘⇧C</kbd> to turn off
+        </p>
+      )}
       {meetingError && (
         <p
           role="alert"

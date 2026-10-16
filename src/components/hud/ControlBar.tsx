@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { BarMenu } from "./BarMenu";
+import { cn } from "../../lib/utils";
 
 // m:ss under an hour, h:mm:ss after
 function formatElapsed(ms: number): string {
@@ -82,6 +83,7 @@ export const ControlBar: React.FC = () => {
   const setLayoutMode = useAppStore((state) => state.setLayoutMode);
   const setAskOpen = useAppStore((state) => state.setAskOpen);
   const hideWindow = useAppStore((state) => state.hideWindow);
+  const isClickThrough = useAppStore((state) => state.isClickThrough);
 
   const handleAsk = () => {
     setIsSettingsOpen(false);
@@ -101,7 +103,7 @@ export const ControlBar: React.FC = () => {
       role="toolbar"
       aria-label="Sidekick controls"
       data-tauri-drag-region
-      className="sk-bar relative"
+      className={cn("sk-bar relative", isClickThrough && "ring-amber-400/70")}
     >
       <MeetingButton />
       <span className="sk-sep" aria-hidden="true" />

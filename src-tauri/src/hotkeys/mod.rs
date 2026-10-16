@@ -265,17 +265,13 @@ pub fn toggle_window_visibility<R: Runtime>(
     }
 }
 
-/// Sets whether mouse clicks ignore the overlay window.
+/// Sets whether mouse clicks ignore the overlay window. The `hit_region` poller applies it
+/// within one tick; it owns the window's ignore-cursor flag.
 pub fn set_click_through<R: Runtime>(
     app: &AppHandle<R>,
     state: &HotkeyState,
     enabled: bool,
 ) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        window
-            .set_ignore_cursor_events(enabled)
-            .map_err(|e| e.to_string())?;
-    }
     state.is_click_through.store(enabled, Ordering::SeqCst);
     let _ = app.emit(
         EVENT_CLICK_THROUGH_TOGGLED,

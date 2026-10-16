@@ -3,6 +3,7 @@
 pub mod appkit;
 pub mod audio;
 pub mod capture;
+pub mod hit_region;
 pub mod hotkeys;
 pub mod storage;
 
@@ -41,6 +42,20 @@ fn burn_session(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Sizes the window to the main screen's height and places it top-centre, just under the menu
+/// bar. It never resizes after this; `hit_region` passes clicks through around the UI.
+fn place_top_centre<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
+    let Some(monitor) = window.primary_monitor()?.or(window.current_monitor()?) else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let margin = (8.0 * monitor.scale_factor()) as u32;
+    let width = window.outer_size()?.width;
+    window.set_size(tauri::PhysicalSize::new(width, area.size.height.saturating_sub(2 * margin)))?;
+    let x = area.position.x + (area.size.width as i32 - width as i32) / 2;
+    window.set_position(tauri::PhysicalPosition::new(x, area.position.y + margin as i32))
+}
+
 use audio::commands::*;
 use capture::capture_active_window;
 use hotkeys::commands::*;
@@ -66,10 +81,21 @@ pub fn run() {
     tauri::Builder::default()
         .manage(hotkeys::HotkeyState::default())
         .manage(audio::AudioState::default())
+        .manage(hit_region::HitRegions::default())
         .plugin(hotkey_plugin)
         .setup(|app| {
             // Ensure local ephemeral session.db exists
             let _ = storage::db::open_session_db();
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                place_top_centre(&main_window)?;
+            }
+            hit_region::spawn_poller(app.handle().clone());
+
+            // Debug builds only: SIDEKICK_DEV_VISIBLE=1 skips screen-share hiding and shows the
+            // window at launch, so the UI can be screenshotted while developing.
+            let dev_visible =
+                cfg!(debug_assertions) && std::env::var_os("SIDEKICK_DEV_VISIBLE").is_some();
 
             #[cfg(target_os = "macos")]
             {
@@ -78,7 +104,15 @@ pub fn run() {
 
                 // 2. Configure stealth overlay on the main window (Task 2 cleanup: safe wrapper)
                 if let Some(main_window) = app.get_webview_window("main") {
-                    appkit::configure_tauri_window(&main_window)?;
+                    if !dev_visible {
+                        appkit::configure_tauri_window(&main_window)?;
+                    }
+                }
+            }
+
+            if dev_visible {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    main_window.show()?;
                 }
             }
 
@@ -86,6 +120,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             set_click_through,
+            hit_region::set_hit_regions,
             trigger_panic,
             set_window_opacity,
             set_layout_mode,

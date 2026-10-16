@@ -73,8 +73,14 @@ export const BarMenu: React.FC = () => {
     const onMouseDown = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
+    // Clicks outside the UI pass through to other apps, so leaving the window closes it too
+    const onBlur = () => setOpen(false);
     document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [open]);
 
   const closeMenu = () => {

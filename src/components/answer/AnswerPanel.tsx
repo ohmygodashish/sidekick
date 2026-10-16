@@ -105,7 +105,7 @@ export const AnswerPanel: React.FC = () => {
   }
 
   return (
-    <section aria-label="Answer" className="sk-panel min-h-0 max-h-full">
+    <section aria-label="Answer" className="sk-panel min-h-0">
       <div className="flex items-start gap-2 px-4 pt-3">
         <p className="sk-meta line-clamp-2 min-w-0 flex-1 pt-1.5">{question || "Ask anything"}</p>
         <button type="button" onClick={close} aria-label="Close" title="Close" className="sk-icon-btn">

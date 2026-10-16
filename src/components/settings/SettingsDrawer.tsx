@@ -175,7 +175,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       role="dialog"
       aria-label="Settings"
       data-testid="settings-drawer"
-      className="sk-panel min-h-0 max-h-full"
+      className="sk-panel min-h-0"
     >
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
         <h2 className="sk-title flex-1">Settings</h2>

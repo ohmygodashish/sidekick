@@ -32,16 +32,19 @@ body,
  */
 @layer components {
   .sk-surface {
-    @apply bg-zinc-900/90 text-zinc-100 shadow-[0_4px_16px_rgba(0,0,0,0.3)] ring-1 ring-inset ring-white/10;
+    @apply bg-zinc-900/90 text-zinc-100 shadow-[0_2px_6px_rgba(0,0,0,0.25)] ring-1 ring-inset ring-white/10;
   }
   .sk-bar {
     @apply sk-surface flex items-center gap-0.5 rounded-full p-1;
   }
   .sk-panel {
     @apply sk-surface flex flex-col rounded-[20px];
+    max-height: min(560px, 100%);
   }
   .sk-menu {
     @apply sk-surface rounded-xl p-1;
+    transform-origin: top right;
+    animation: sk-pop-in 150ms cubic-bezier(0.23, 1, 0.32, 1);
   }
 
   /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
@@ -98,5 +101,25 @@ body,
   .sk-scroll {
     scrollbar-width: thin;
     scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+  }
+}
+
+/* Popups start just smaller and transparent; this also hides the frame before the window grows */
+@keyframes sk-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-menu {
+    animation-name: sk-fade-in;
+  }
+}
+
+@keyframes sk-fade-in {
+  from {
+    opacity: 0;
   }
 }

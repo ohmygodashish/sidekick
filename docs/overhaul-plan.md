@@ -13,24 +13,25 @@ Audit IDs refer to [`audit.md`](audit.md).
 
 | Topic | Decision |
 | --- | --- |
-| Window | The native window is exactly the size of its content (bar + caption + options + panel) and resizes as they open and close. Clicks outside reach the apps underneath. |
+| Window | One fixed transparent window (600 pt wide, screen height, top-centre) that never resizes. Rust polls the cursor and passes clicks through everywhere except the UI's surfaces, which the frontend reports. (Shrink-to-fit was tried first: resizing WKWebView blinked the page, and pinning the web view inside a resizing window broke WebKit's hover.) |
 | Position | Top-centre of the screen, just under the menu bar, on every launch. Dragging moves it for the session only; nothing is persisted. |
 | Listening feedback | Two level dots inside the Stop button (them, you) from a throttled Rust level event, plus one caption line under the bar with the latest transcribed sentence and its speaker. |
 | Live options | While a meeting is live, three numbered options sit under the caption and update as the conversation goes on. Before any question, all three are questions the interviewer is likely to ask next on the current topic. When a real question is asked, it takes slot 1, marked "Asked", and stays pinned there until the next question is asked. Slots 2–3 keep rolling. Nothing is answered automatically. |
 | Picking | Click an option, or press the global hotkeys ⌘⌥1 / ⌘⌥2 / ⌘⌥3 (they work while the meeting app has focus). |
 | Layout | Bar → caption → options → answer. The options stay visible above a streaming answer, with the picked one highlighted; picking another replaces the answer. |
 | Look | Direction A (today's dark pieces, tightened) and direction C (the same layout on light frosted surfaces), with a System / Light / Dark setting. All colours become theme variables. |
-| Motion | Quiet and quick: 150–200 ms ease-out fades with a 4px slide for the panel, menu, caption and options; options cross-fade when their text changes; Start↔Stop icons cross-fade; the bar never changes width. No bounce or loops. Reduced motion is respected. The window grows before something enters and shrinks only after it has left. |
+| Motion | Quiet and quick: 150–200 ms ease-out fades with a 4px slide for the panel, menu, caption and options; options cross-fade when their text changes; Start↔Stop icons cross-fade; the bar never changes width. No bounce or loops. Reduced motion is respected. |
 | Honesty | No canned answers or invented transcripts. Missing keys, provider errors, stalls and speech-to-text failures show a short error with what to do next. |
 
 ## Phases
 
-### 1. Window (single agent)
+### 1. Window (single agent) — done
 
-- `tauri.conf.json`: fixed width, small initial height.
-- Rust: position the window top-centre of the monitor's work area on setup.
-- Frontend: a `ResizeObserver` on the content column sets the window height. It grows immediately and shrinks after exit transitions. Add the `set-size` and `set-position` capabilities.
-- Check in the real window that the top edge stays fixed when the height changes. If it doesn't, fall back to one Rust command that sets the frame with the top anchored.
+- Rust `place_top_centre`: on setup, the window takes the main screen's work-area height and sits top-centre.
+- Rust `hit_region.rs`: polls the cursor every 16 ms and sets `ignore_cursor_events` unless the cursor is over a reported rect. ⌘⇧C forces pass-through.
+- Frontend `useHitRegions`: reports every `.sk-bar`, `.sk-panel`, `.sk-menu` and `.sk-surface` rect, re-measuring on resize, mount and animation end.
+- Click-through on: amber ring on the bar and a "Click-through on" pill. The menu also closes on window blur.
+- Debug builds: `SIDEKICK_DEV_VISIBLE=1` skips screen-share hiding and shows the window at launch, for testing.
 
 ### 2. Core fixes (two parallel Haiku agents, Opus review)
 
