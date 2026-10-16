@@ -31,12 +31,12 @@ describe("SettingsDrawer", () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it("renders an inline dialog with four tabs, Keys selected by default", () => {
+    it("renders an inline dialog with five tabs, Keys selected by default", () => {
       render(<SettingsDrawer isOpen={true} />);
 
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Danger"]);
+      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Appearance", "Danger"]);
       expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("true");
     });
 
@@ -50,6 +50,9 @@ describe("SettingsDrawer", () => {
 
       openTab("Audio");
       expect(screen.getByRole("radiogroup", { name: "Speech-to-text engine" })).toBeDefined();
+
+      openTab("Appearance");
+      expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeDefined();
 
       openTab("Danger");
       expect(screen.getByText("These can't be undone.")).toBeDefined();
@@ -102,11 +105,25 @@ describe("SettingsDrawer", () => {
     it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      for (const name of ["Keys", "Profile", "Audio", "Danger"]) {
+      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
         openTab(name);
         expect(screen.getByRole("dialog").textContent).not.toMatch(
           /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
         );
+      }
+    });
+
+    it("uses theme tokens, not palette colours, on every tab", () => {
+      render(<SettingsDrawer isOpen={true} />);
+      const palette =
+        /(?:^|[\s:])(?:text|bg|ring|border|placeholder|divide|fill)-(?:zinc|sky|red|emerald|amber|orange|slate|gray|white|black)\b/;
+
+      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
+        openTab(name);
+        const offenders = Array.from(screen.getByRole("dialog").querySelectorAll("[class]"))
+          .map((el) => el.getAttribute("class") ?? "")
+          .filter((cls) => palette.test(cls));
+        expect(offenders, `${name} tab`).toEqual([]);
       }
     });
   });
@@ -340,6 +357,50 @@ describe("SettingsDrawer", () => {
 
       expect(screen.getByText("Download failed. Check your connection.")).toBeDefined();
       expect(screen.queryByText(/ggml/)).toBeNull();
+    });
+  });
+
+  describe("Appearance tab", () => {
+    it("shows the saved theme as selected", () => {
+      useSettingsStore.setState({ theme: "dark" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      expect(within(group).getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+      expect(within(group).getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByText("System follows your macOS appearance.")).toBeDefined();
+    });
+
+    it("sets the theme when an option is chosen", () => {
+      useSettingsStore.setState({ theme: "system" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      fireEvent.click(within(group).getByRole("radio", { name: "Light" }));
+
+      expect(useSettingsStore.getState().theme).toBe("light");
+      expect(within(group).getByRole("radio", { name: "Light" }).getAttribute("aria-checked")).toBe("true");
+      expect(within(group).getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("moves the theme selection with the arrow keys and wraps around", () => {
+      useSettingsStore.setState({ theme: "system" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      fireEvent.keyDown(within(group).getByRole("radio", { name: "System" }), { key: "ArrowRight" });
+      expect(useSettingsStore.getState().theme).toBe("light");
+      expect(document.activeElement).toBe(within(group).getByRole("radio", { name: "Light" }));
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+      expect(useSettingsStore.getState().theme).toBe("dark");
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowRight" });
+      expect(useSettingsStore.getState().theme).toBe("system");
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowLeft" });
+      expect(useSettingsStore.getState().theme).toBe("dark");
+      expect(within(group).getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
     });
   });
 

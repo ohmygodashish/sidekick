@@ -5,6 +5,7 @@ import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
 import { useLiveOptions } from "./hooks/useLiveOptions";
 import { useDeepSolver } from "./hooks/useDeepSolver";
+import { useTheme } from "./hooks/useTheme";
 import { setSttEngine } from "./lib/ipc";
 
 export default function App() {
@@ -16,6 +17,9 @@ export default function App() {
 
   // Deep solver gateway with progressive streaming (REQ-014, REQ-015)
   useDeepSolver();
+
+  // System / Light / Dark from Settings
+  useTheme();
 
   useEffect(() => {
     syncFromBackend();

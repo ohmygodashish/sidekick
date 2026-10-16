@@ -1,14 +1,15 @@
 import React from "react";
 import { useAppStore } from "../../store/appStore";
 import { useSessionStore, Speaker, TranscriptTurn } from "../../store/sessionStore";
+import { usePresence } from "../../hooks/usePresence";
 
 // Captions read best from the end, so long turns keep their tail
 const MAX_CHARS = 120;
 
 // Each source's label matches its level dot in the bar
 const SOURCES: { speaker: Speaker; label: string; tone: string }[] = [
-  { speaker: "interviewer", label: "System", tone: "text-sky-300" },
-  { speaker: "candidate", label: "Microphone", tone: "text-orange-300" },
+  { speaker: "interviewer", label: "System", tone: "text-sk-system" },
+  { speaker: "candidate", label: "Microphone", tone: "text-sk-mic" },
 ];
 
 const latestFrom = (transcript: TranscriptTurn[], speaker: Speaker) => {
@@ -22,7 +23,8 @@ export const CaptionLine: React.FC = () => {
   const sttError = useAppStore((s) => s.sttError);
   const system = useSessionStore((s) => latestFrom(s.transcript, "interviewer"));
   const mic = useSessionStore((s) => latestFrom(s.transcript, "candidate"));
-  if (!isLive) return null;
+  const presence = usePresence(isLive);
+  if (!presence.mounted) return null;
 
   const turns = { interviewer: system, candidate: mic };
 
@@ -30,24 +32,29 @@ export const CaptionLine: React.FC = () => {
     <div
       data-testid="caption-line"
       aria-live="polite"
-      className="sk-surface w-full max-w-[560px] rounded-xl px-3 py-1.5 text-[12px] leading-5 text-zinc-200"
+      data-state={presence.state}
+      inert={presence.state === "closed"}
+      className="sk-surface sk-pop w-full max-w-[560px] rounded-xl px-3 py-1.5 text-[12px] leading-5 text-sk-fg-2"
     >
       {SOURCES.map(({ speaker, label, tone }) => {
-        const text = turns[speaker]?.text;
+        const turn = turns[speaker];
         return (
           <p key={speaker} className="truncate">
             <span className={tone}>{label}</span>
-            <span className="text-zinc-500"> · </span>
-            {text ? (
-              text.length > MAX_CHARS ? `…${text.slice(-MAX_CHARS)}` : text
+            <span className="text-sk-fg-4"> · </span>
+            {turn ? (
+              // Keyed by turn so each new sentence fades in
+              <span key={turn.id} className="sk-fade">
+                {turn.text.length > MAX_CHARS ? `…${turn.text.slice(-MAX_CHARS)}` : turn.text}
+              </span>
             ) : (
-              <span className="text-zinc-500">Listening…</span>
+              <span className="text-sk-fg-4">Listening…</span>
             )}
           </p>
         );
       })}
       {sttError && (
-        <p role="status" className={`truncate ${sttError.recovered ? "text-amber-300" : "text-red-300"}`}>
+        <p role="status" className={`sk-fade truncate ${sttError.recovered ? "text-sk-warn" : "text-sk-danger"}`}>
           {sttError.message}
         </p>
       )}

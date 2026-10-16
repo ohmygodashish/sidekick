@@ -60,12 +60,12 @@ function highlightLine(line: string, pattern: RegExp): React.ReactNode[] {
     last = at + text.length;
 
     let cls: string | undefined;
-    if (comment) cls = "text-zinc-500 italic";
-    else if (str) cls = "text-emerald-300";
-    else if (num) cls = "text-amber-200";
-    else if (func) cls = KEYWORDS.has(func) ? "text-sky-300" : "text-zinc-100";
-    else if (word) cls = KEYWORDS.has(word) ? "text-sky-300" : "text-zinc-200";
-    else if (op || punct) cls = "text-zinc-400";
+    if (comment) cls = "text-sk-code-comment italic";
+    else if (str) cls = "text-sk-code-string";
+    else if (num) cls = "text-sk-code-number";
+    else if (func) cls = KEYWORDS.has(func) ? "text-sk-code-keyword" : "text-sk-code-fg";
+    else if (word) cls = KEYWORDS.has(word) ? "text-sk-code-keyword" : "text-sk-code-fg";
+    else if (op || punct) cls = "text-sk-code-punct";
 
     nodes.push(cls ? <span key={at} className={cls}>{text}</span> : text);
   }
@@ -94,26 +94,29 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = "", class
   const pattern = tokenPattern(language);
 
   return (
-    <div className={cn("overflow-hidden rounded-lg bg-black/30 ring-1 ring-inset ring-white/5", className)}>
+    <div className={cn("overflow-hidden rounded-lg bg-sk-code ring-1 ring-inset ring-sk-line", className)}>
       <div className="flex items-center justify-between px-3 py-1.5">
         <span className="sk-meta">{language}</span>
         <button type="button" onClick={handleCopy} className="sk-btn">
-          {copied ? (
-            <>
-              <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-              <span className="text-emerald-400">Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-              Copy
-            </>
-          )}
+          {/* Keyed so the swap cross-fades instead of popping */}
+          <span key={copied ? "copied" : "copy"} className="sk-fade inline-flex items-center gap-1.5">
+            {copied ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-sk-success" aria-hidden="true" />
+                <span className="text-sk-success">Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                Copy
+              </>
+            )}
+          </span>
         </button>
       </div>
 
       <div className="overflow-x-auto sk-scroll">
-        <pre className="px-3 py-2 font-mono text-[12px] leading-5 text-zinc-200">
+        <pre className="px-3 py-2 font-mono text-[12px] leading-5 text-sk-code-fg">
           {code.split("\n").map((line, i) => (
             <Fragment key={i}>
               {i > 0 && "\n"}

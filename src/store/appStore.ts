@@ -115,7 +115,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stopMeeting: async () => {
     if (get().meetingStatus !== "live") return;
-    set({ meetingStatus: "stopping" });
+    set({ meetingStatus: "stopping", meetingError: null });
     try {
       await invokeInTauri("stop_audio_capture");
       set({ ...MEETING_IDLE, meetingError: null });

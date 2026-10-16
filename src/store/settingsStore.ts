@@ -14,6 +14,8 @@ export type ApiProvider =
 
 export type SttMode = "whisper_local" | "deepgram" | "groq";
 
+export type ThemePreference = "system" | "light" | "dark";
+
 export type SeniorityPreset = "junior" | "mid" | "senior" | "staff" | "principal";
 
 export type TonePreset =
@@ -46,6 +48,9 @@ export interface SettingsState {
   // Speech-to-Text Configuration
   sttMode: SttMode;
 
+  // Appearance
+  theme: ThemePreference;
+
   // UI Drawer State
   isSettingsOpen: boolean;
 
@@ -61,6 +66,7 @@ export interface SettingsState {
   setSeniority: (seniority: SeniorityPreset) => void;
   setTone: (tone: TonePreset) => void;
   setSttMode: (mode: SttMode) => void;
+  setTheme: (theme: ThemePreference) => void;
   setIsSettingsOpen: (open: boolean) => void;
   toggleSettings: () => void;
   resetSettings: () => void;
@@ -88,6 +94,7 @@ const defaultState = {
   evaluatorModel: "qwen/qwen3.8-27b",
   profile: defaultProfile,
   sttMode: "whisper_local" as SttMode,
+  theme: "system" as ThemePreference,
   isSettingsOpen: false,
 };
 
@@ -211,6 +218,7 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
 
+      setTheme: (theme) => set({ theme }),
       setSttMode: (mode) => {
         set({ sttMode: mode });
         safeInvoke("set_stt_engine", { engine: mode });

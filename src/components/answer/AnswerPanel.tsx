@@ -59,7 +59,7 @@ export const AnswerPanel: React.FC = () => {
     body = (
       <div
         role="alert"
-        className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-[13px] text-red-300"
+        className="sk-fade flex items-start gap-2 rounded-lg bg-sk-danger-tint px-3 py-2 text-[13px] text-sk-danger"
       >
         <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1">{solveError}</span>
@@ -79,7 +79,7 @@ export const AnswerPanel: React.FC = () => {
       <>
         {hasSolution && <ProgressiveCard />}
         {isSolving && (
-          <p className="flex items-center gap-2 sk-meta">
+          <p className="sk-fade flex items-center gap-2 sk-meta">
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
             Thinking…
           </p>
@@ -89,7 +89,7 @@ export const AnswerPanel: React.FC = () => {
   }
 
   return (
-    <section aria-label="Answer" className="sk-panel min-h-0">
+    <section aria-label="Answer" className="sk-panel sk-pop min-h-0">
       <div className="flex items-start gap-2 px-4 pt-3">
         <p className="sk-meta line-clamp-2 min-w-0 flex-1 pt-1.5">{question || "Ask anything"}</p>
         <button type="button" onClick={close} aria-label="Close" title="Close" className="sk-icon-btn">

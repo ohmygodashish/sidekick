@@ -20,8 +20,8 @@ const LevelDots: React.FC = () => {
   const dot = "h-1.5 w-1.5 rounded-full transition-opacity duration-100";
   return (
     <span className="flex items-center gap-1" aria-hidden="true">
-      <span className={cn(dot, "bg-sky-400")} style={{ opacity: 0.25 + 0.75 * levels.interviewer }} />
-      <span className={cn(dot, "bg-orange-400")} style={{ opacity: 0.25 + 0.75 * levels.candidate }} />
+      <span className={cn(dot, "bg-sk-system")} style={{ opacity: 0.25 + 0.75 * levels.interviewer }} />
+      <span className={cn(dot, "bg-sk-mic")} style={{ opacity: 0.25 + 0.75 * levels.candidate }} />
     </span>
   );
 };
@@ -40,51 +40,47 @@ const MeetingButton: React.FC = () => {
     return () => clearInterval(id);
   }, [meetingStatus]);
 
-  if (meetingStatus === "starting") {
-    return (
-      <button type="button" className="sk-btn" disabled>
-        <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-        Starting…
-      </button>
-    );
-  }
+  const isLive = meetingStatus === "live";
+  const isBusy = meetingStatus === "starting" || meetingStatus === "stopping";
 
-  if (meetingStatus === "stopping") {
-    return (
-      <button type="button" className="sk-btn" disabled>
+  let content: React.ReactNode;
+  if (isBusy) {
+    content = (
+      <>
         <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-        Stopping…
-      </button>
+        {meetingStatus === "starting" ? "Starting…" : "Stopping…"}
+      </>
     );
-  }
-
-  if (meetingStatus === "live") {
-    return (
-      <button
-        type="button"
-        className="sk-btn"
-        aria-label="Stop meeting"
-        onClick={() => stopMeeting()}
-      >
+  } else if (isLive) {
+    content = (
+      <>
         <LevelDots />
         Stop
-        <span className="tabular-nums text-zinc-400">
-          {formatElapsed(now - (meetingStartedAt ?? now))}
-        </span>
-      </button>
+        <span className="tabular-nums text-sk-fg-3">{formatElapsed(now - (meetingStartedAt ?? now))}</span>
+      </>
+    );
+  } else {
+    content = (
+      <>
+        <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+        Start
+      </>
     );
   }
 
+  // One button with a fixed minimum width, so the bar never changes size between states
   return (
     <button
       type="button"
-      className="sk-btn"
-      aria-label="Start meeting"
-      title="Start listening to the meeting"
-      onClick={() => startMeeting()}
+      className="sk-btn min-w-[132px] justify-center"
+      disabled={isBusy}
+      aria-label={isLive ? "Stop meeting" : isBusy ? undefined : "Start meeting"}
+      title={!isLive && !isBusy ? "Start listening to the meeting" : undefined}
+      onClick={() => (isLive ? stopMeeting() : startMeeting())}
     >
-      <Mic className="h-3.5 w-3.5" aria-hidden="true" />
-      Start
+      <span key={meetingStatus} className="sk-fade inline-flex items-center gap-1.5">
+        {content}
+      </span>
     </button>
   );
 };
@@ -110,7 +106,7 @@ export const ControlBar: React.FC = () => {
       role="toolbar"
       aria-label="Sidekick controls"
       data-tauri-drag-region
-      className={cn("sk-bar relative", isClickThrough && "ring-amber-400/70")}
+      className={cn("sk-bar relative", isClickThrough && "[--sk-surface-line:var(--sk-warn)]")}
     >
       <MeetingButton />
       <span className="sk-sep" aria-hidden="true" />
