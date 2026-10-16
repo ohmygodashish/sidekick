@@ -3,6 +3,8 @@ import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { useHitRegions } from "../../hooks/useHitRegions";
 import { ControlBar } from "./ControlBar";
+import { CaptionLine } from "./CaptionLine";
+import { LiveOptions } from "./LiveOptions";
 import { AnswerPanel } from "../answer/AnswerPanel";
 import { SettingsDrawer } from "../settings/SettingsDrawer";
 
@@ -37,6 +39,14 @@ export const HUDContainer: React.FC = () => {
             ? "Couldn't stop listening. Try again, or press ⌘Esc to stop everything."
             : "Couldn't start listening. Check Microphone and Screen Recording access in System Settings."}
         </p>
+      )}
+      {layoutMode !== "dynamic_notch" && (
+        <>
+          <CaptionLine />
+          <div className="w-full max-w-[560px]">
+            <LiveOptions />
+          </div>
+        </>
       )}
       <div className="flex min-h-0 w-full max-w-[560px] flex-1 flex-col">
         {isSettingsOpen ? (

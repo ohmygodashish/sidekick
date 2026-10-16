@@ -148,7 +148,7 @@ export function buildUserPrompt(
   }
 
   if (options?.transcript?.trim()) {
-    parts.push(`Recent Interviewer Speech Transcript:\n"${options.transcript.trim()}"`);
+    parts.push(`Recent conversation (speech-to-text):\n<transcript>\n${options.transcript.trim()}\n</transcript>`);
   }
 
   parts.push(

@@ -88,9 +88,8 @@ describe("HUDContainer", () => {
     expect(useAppStore.getState().isAskOpen).toBe(true);
   });
 
-  it("Ask with a detected question starts a solve for it", () => {
+  it("Ask opens the typed question even when a question is active, without solving", () => {
     useSessionStore.getState().setActiveQuestion(question);
-    const stored = useSessionStore.getState().activeQuestion;
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
 
@@ -98,8 +97,8 @@ describe("HUDContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
 
     window.removeEventListener("sidekick:deep_solve", listener);
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual(stored);
+    expect(listener).not.toHaveBeenCalled();
+    expect(useAppStore.getState().isAskOpen).toBe(true);
   });
 
   it("compact view hides the answer panel, and Ask brings it back", () => {

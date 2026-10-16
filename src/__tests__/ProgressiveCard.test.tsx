@@ -199,13 +199,12 @@ describe("AnswerPanel", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows quick pointers and the Cmd+Enter hint for a detected question", () => {
+  it("shows the active question without the old quick pointers", () => {
     useSessionStore.getState().setActiveQuestion(question);
     render(<AnswerPanel />);
 
     expect(screen.getByText("Design a rate limiter?")).toBeDefined();
-    expect(screen.getByText("Token bucket")).toBeDefined();
-    expect(screen.getByText("⌘↵")).toBeDefined();
+    expect(screen.queryByText("Token bucket")).toBeNull();
   });
 
   it("shows Thinking while solving and the answer above it", () => {

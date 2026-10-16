@@ -176,7 +176,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
       expect(userPrompt).toContain("Design a rate limiter for multi-tenant API");
       expect(userPrompt).toContain("- Token Bucket");
       expect(userPrompt).toContain("- Redis Lua script");
-      expect(userPrompt).toContain("Recent Interviewer Speech Transcript:");
+      expect(userPrompt).toContain("<transcript>\nSo I was wondering how you would design this?\n</transcript>");
     });
   });
 

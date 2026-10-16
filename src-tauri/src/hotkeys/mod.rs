@@ -23,6 +23,8 @@ pub const SHORTCUT_TOGGLE_VISIBILITY: &str = "Super+Shift+Space";
 pub const SHORTCUT_TOGGLE_CLICK_THROUGH: &str = "Super+Shift+C";
 pub const SHORTCUT_TOGGLE_LAYOUT_MODE: &str = "Super+Shift+M";
 pub const SHORTCUT_CAPTURE_ACTIVE_WINDOW: &str = "Super+Shift+S";
+/// Cmd+Option+1/2/3 pick a live option; browsers own Cmd+1-9 and Cmd+Shift+3 is a screenshot
+pub const SHORTCUT_PICK_OPTIONS: [&str; 3] = ["Super+Alt+Digit1", "Super+Alt+Digit2", "Super+Alt+Digit3"];
 
 /// Event names emitted to frontend
 pub const EVENT_PANIC: &str = "sidekick://panic";
@@ -31,6 +33,7 @@ pub const EVENT_CLICK_THROUGH_TOGGLED: &str = "sidekick://click_through_toggled"
 pub const EVENT_TOGGLE_LAYOUT_MODE: &str = "sidekick://toggle_layout_mode";
 pub const EVENT_OPACITY_CHANGED: &str = "sidekick://opacity_changed";
 pub const EVENT_ACTIVE_WINDOW_CAPTURED: &str = "sidekick://active_window_captured";
+pub const EVENT_PICK_OPTION: &str = "sidekick://pick_option";
 
 /// Layout display modes supported by Sidekick
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +97,8 @@ pub enum SidekickAction {
     ToggleLayoutMode,
     /// Silently capture frontmost active application window
     CaptureActiveWindow,
+    /// Index 0-2 of the live option to answer
+    PickOption(u8),
 }
 
 /// Resolves a parsed `Shortcut` into the matching `SidekickAction`
@@ -108,6 +113,12 @@ pub fn resolve_action(shortcut: &Shortcut) -> Option<SidekickAction> {
         Some(SidekickAction::ToggleLayoutMode)
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyS) {
         Some(SidekickAction::CaptureActiveWindow)
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit1) {
+        Some(SidekickAction::PickOption(0))
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit2) {
+        Some(SidekickAction::PickOption(1))
+    } else if shortcut.matches(Modifiers::SUPER | Modifiers::ALT, Code::Digit3) {
+        Some(SidekickAction::PickOption(2))
     } else {
         None
     }
@@ -195,6 +206,19 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
                         }
                     }
                 });
+            }
+            SidekickAction::PickOption(index) => {
+                // The answer must be visible, so summon a hidden overlay first
+                let hidden = app
+                    .get_webview_window("main")
+                    .map(|w| !w.is_visible().unwrap_or(true))
+                    .unwrap_or(false);
+                if hidden {
+                    if let Err(e) = toggle_window_visibility(app, &state) {
+                        eprintln!("[Sidekick Hotkeys] Failed to show window for option: {e}");
+                    }
+                }
+                let _ = app.emit(EVENT_PICK_OPTION, serde_json::json!({ "index": index }));
             }
         }
     }
@@ -492,6 +516,17 @@ mod tests {
 
         let s2: Shortcut = "Cmd+Shift+M".parse().expect("Failed to parse Cmd+Shift+M");
         assert_eq!(resolve_action(&s2), Some(SidekickAction::ToggleLayoutMode));
+    }
+
+    #[test]
+    fn test_resolve_action_pick_option() {
+        for (i, raw) in SHORTCUT_PICK_OPTIONS.iter().enumerate() {
+            let s: Shortcut = raw.parse().expect("Failed to parse pick-option shortcut");
+            assert_eq!(resolve_action(&s), Some(SidekickAction::PickOption(i as u8)));
+        }
+        // Plain Cmd+1 belongs to the browser and must not be taken
+        let plain: Shortcut = "Super+Digit1".parse().expect("Failed to parse Cmd+1");
+        assert_eq!(resolve_action(&plain), None);
     }
 
     #[test]

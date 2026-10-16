@@ -69,6 +69,9 @@ pub fn run() {
             hotkeys::SHORTCUT_TOGGLE_CLICK_THROUGH,
             hotkeys::SHORTCUT_TOGGLE_LAYOUT_MODE,
             hotkeys::SHORTCUT_CAPTURE_ACTIVE_WINDOW,
+            hotkeys::SHORTCUT_PICK_OPTIONS[0],
+            hotkeys::SHORTCUT_PICK_OPTIONS[1],
+            hotkeys::SHORTCUT_PICK_OPTIONS[2],
         ])
         .expect("failed to configure default global shortcuts")
         .with_handler(|app, shortcut, event| {

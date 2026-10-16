@@ -3,7 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { HUDContainer } from "./components/hud/HUDContainer";
 import { setupAppEventListeners, useAppStore } from "./store/appStore";
 import { useSettingsStore } from "./store/settingsStore";
-import { useQuestionDetector } from "./hooks/useQuestionDetector";
+import { useLiveOptions } from "./hooks/useLiveOptions";
 import { useDeepSolver } from "./hooks/useDeepSolver";
 import { setSttEngine } from "./lib/ipc";
 
@@ -11,8 +11,8 @@ export default function App() {
   const syncFromBackend = useAppStore((state) => state.syncFromBackend);
   const opacity = useAppStore((state) => state.opacity);
 
-  // Live question detection (interviewer only) and Enter / Cmd+Enter to solve (REQ-011, REQ-012)
-  useQuestionDetector();
+  // Live options from the transcript, picked by click or Cmd+Option+1/2/3
+  useLiveOptions();
 
   // Deep solver gateway with progressive streaming (REQ-014, REQ-015)
   useDeepSolver();

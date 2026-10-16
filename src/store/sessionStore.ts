@@ -57,6 +57,12 @@ export interface SessionState {
   streamingStage: 1 | 2 | 3 | null;
   solveError: string | null;
 
+  // Live options: the asked question stays pinned until the next one is asked
+  askedQuestion: string | null;
+  likelyQuestions: string[];
+  pickedOption: string | null;
+  optionsError: string | null;
+
   // Actions
   addTranscriptTurn: (turn: Omit<TranscriptTurn, "id"> & { id?: string }) => void;
   setActiveQuestion: (
@@ -111,6 +117,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   isSolving: false,
   streamingStage: null,
   solveError: null,
+  askedQuestion: null,
+  likelyQuestions: [],
+  pickedOption: null,
+  optionsError: null,
 
   addTranscriptTurn: (turn) => {
     const id =
@@ -256,5 +266,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       isSolving: false,
       streamingStage: null,
       solveError: null,
+      askedQuestion: null,
+      likelyQuestions: [],
+      pickedOption: null,
+      optionsError: null,
     }),
 }));

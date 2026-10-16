@@ -7,7 +7,24 @@ export type LayoutMode = "floating_hud" | "dynamic_notch";
 
 export type MeetingStatus = "idle" | "starting" | "live" | "stopping";
 
-const MEETING_IDLE = { meetingStatus: "idle" as MeetingStatus, meetingStartedAt: null };
+export interface AudioLevels {
+  interviewer: number; // 0-1
+  candidate: number; // 0-1
+}
+
+export interface SttError {
+  message: string;
+  recovered: boolean; // a cloud failure the local model covered
+}
+
+const ZERO_LEVELS: AudioLevels = { interviewer: 0, candidate: 0 };
+// Idle also clears what only means something while listening
+const MEETING_IDLE = {
+  meetingStatus: "idle" as MeetingStatus,
+  meetingStartedAt: null,
+  audioLevels: ZERO_LEVELS,
+  sttError: null as SttError | null,
+};
 
 export interface AppState {
   layoutMode: LayoutMode;
@@ -18,6 +35,8 @@ export interface AppState {
   meetingStatus: MeetingStatus; // audio is captured only while "live"
   meetingStartedAt: number | null;
   meetingError: string | null;
+  audioLevels: AudioLevels;
+  sttError: SttError | null;
   isAskOpen: boolean; // answer panel opened by Ask with no detected question
 
   // Actions
@@ -43,6 +62,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   meetingStatus: "idle",
   meetingStartedAt: null,
   meetingError: null,
+  audioLevels: ZERO_LEVELS,
+  sttError: null,
   isAskOpen: false,
 
   setLayoutMode: async (mode: LayoutMode) => {
@@ -82,7 +103,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   startMeeting: async () => {
     if (get().meetingStatus !== "idle") return;
-    set({ meetingStatus: "starting", meetingError: null });
+    set({ meetingStatus: "starting", meetingError: null, sttError: null });
     try {
       await invokeInTauri("start_audio_capture", { config: null });
       set({ meetingStatus: "live", meetingStartedAt: Date.now() });
@@ -219,6 +240,8 @@ export async function setupAppEventListeners(): Promise<() => void> {
       is_final: boolean;
     }>("sidekick://stt_chunk", (e) => {
       if (e.payload && e.payload.text) {
+        // Speech came through, so an earlier transcription error no longer applies
+        useAppStore.setState({ sttError: null });
         useSessionStore.getState().addTranscriptTurn({
           id: e.payload.id,
           speaker: e.payload.speaker,
@@ -228,6 +251,18 @@ export async function setupAppEventListeners(): Promise<() => void> {
       }
     });
     unlisteners.push(unlistenStt);
+
+    // Live levels, about 10 per second while listening
+    const unlistenLevel = await listen<AudioLevels>("sidekick://audio_level", (e) => {
+      if (useAppStore.getState().meetingStatus === "live") useAppStore.setState({ audioLevels: e.payload });
+    });
+    unlisteners.push(unlistenLevel);
+
+    // Speech-to-text failures (Rust never invents text, it reports instead)
+    const unlistenSttError = await listen<SttError>("sidekick://stt_error", (e) => {
+      useAppStore.setState({ sttError: { message: e.payload.message, recovered: e.payload.recovered } });
+    });
+    unlisteners.push(unlistenSttError);
 
     // 7. Session Burned event (sidekick://session_burned)
     const unlistenBurned = await listen<{ timestamp?: number }>(

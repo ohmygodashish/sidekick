@@ -4,8 +4,6 @@ import { useSessionStore, DetectedQuestion } from "../../store/sessionStore";
 import { useAppStore } from "../../store/appStore";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
 
-const isString = (x: unknown): x is string => typeof x === "string";
-
 const dispatchSolve = (question: DetectedQuestion) =>
   window.dispatchEvent(new CustomEvent("sidekick:deep_solve", { detail: question }));
 
@@ -30,13 +28,12 @@ export const AnswerPanel: React.FC = () => {
   if (!activeQuestion && !hasSolution && !isSolving && !solveError && !isAskOpen) return null;
 
   const question = activeQuestion ? activeQuestion.extractedQuestion || activeQuestion.rawTranscript : "";
-  const pointers = (activeQuestion?.quickPointers ?? []).filter(isString).slice(0, 4);
 
   const close = () => {
     window.dispatchEvent(new Event("sidekick:cancel_solve"));
     useSessionStore.getState().setActiveQuestion(null);
     useSessionStore.getState().setSolution(null);
-    useSessionStore.setState({ solveError: null });
+    useSessionStore.setState({ solveError: null, pickedOption: null });
     setAskOpen(false);
   };
 
@@ -87,19 +84,6 @@ export const AnswerPanel: React.FC = () => {
             Thinking…
           </p>
         )}
-      </>
-    );
-  } else if (pointers.length > 0) {
-    body = (
-      <>
-        <ul data-testid="question-pointers" className="list-disc space-y-1 pl-5 sk-body text-zinc-200">
-          {pointers.map((pointer, i) => (
-            <li key={i}>{pointer}</li>
-          ))}
-        </ul>
-        <p className="sk-meta">
-          Press <kbd className="sk-kbd">⌘↵</kbd> for a full answer
-        </p>
       </>
     );
   }
