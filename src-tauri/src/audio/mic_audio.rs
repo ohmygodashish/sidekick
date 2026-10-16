@@ -11,6 +11,39 @@ use std::thread;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 
+/// Error returned when macOS denies or restricts the microphone (matched by the friendly warning in `mod.rs`)
+pub const MIC_ACCESS_DENIED: &str = "Microphone access is denied";
+
+#[cfg(target_os = "macos")]
+#[link(name = "AVFoundation", kind = "framework")]
+#[allow(deprecated)]
+extern "C" {
+    #[allow(non_upper_case_globals)]
+    static AVMediaTypeAudio: cocoa::base::id;
+}
+
+/// AVAuthorizationStatus for audio: 0 not determined, 1 restricted, 2 denied, 3 authorized
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+fn authorization_status() -> isize {
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let status: isize = msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: AVMediaTypeAudio];
+        status
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn authorization_status() -> isize {
+    3
+}
+
+/// True when the microphone is blocked. Opening it then still succeeds, but delivers silence.
+/// A not-determined status is allowed, since opening the stream is what triggers macOS's prompt.
+pub fn mic_status_blocks(status: isize) -> bool {
+    matches!(status, 1 | 2)
+}
+
 /// Safe sample conversion from i16 PCM to normalized -1.0..1.0 float32
 pub fn convert_i16_to_f32(samples: &[i16]) -> Vec<f32> {
     samples
@@ -42,6 +75,10 @@ impl MicAudioCapture {
     where
         F: Fn(&[f32], u32, u16) + Send + Sync + 'static,
     {
+        if mic_status_blocks(authorization_status()) {
+            return Err(MIC_ACCESS_DENIED.to_string());
+        }
+
         let host = cpal::default_host();
         let device = host
             .default_input_device()

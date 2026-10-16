@@ -37,6 +37,20 @@ extern "C" {
         err_buf_len: usize,
     ) -> *mut SCKAudioBridgeHandle;
     fn sck_audio_stop(handle: *mut SCKAudioBridgeHandle);
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+/// Error returned when Screen Recording is not allowed (matched by the friendly warning in `mod.rs`)
+pub const SCREEN_RECORDING_DENIED: &str = "Screen Recording permission not granted. Please enable Screen Recording for Sidekick in macOS System Settings > Privacy & Security > Screen Recording.";
+
+/// Asks macOS for Screen Recording access once per process, which shows its prompt or lists the app
+fn request_screen_capture_access_once() {
+    static REQUESTED: AtomicBool = AtomicBool::new(false);
+    if !REQUESTED.swap(true, Ordering::SeqCst) {
+        unsafe {
+            CGRequestScreenCaptureAccess();
+        }
+    }
 }
 
 /// Trampoline function converting C audio buffer callbacks to Rust closures
@@ -91,9 +105,8 @@ impl SckAudioCapture {
         }
 
         if !Self::has_permission() {
-            return Err(
-                "Screen Recording permission not granted. Please enable Screen Recording for Sidekick in macOS System Settings > Privacy & Security > Screen Recording.".to_string(),
-            );
+            request_screen_capture_access_once();
+            return Err(SCREEN_RECORDING_DENIED.to_string());
         }
 
         let is_running = Arc::new(AtomicBool::new(true));

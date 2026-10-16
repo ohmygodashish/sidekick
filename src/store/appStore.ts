@@ -18,6 +18,8 @@ export interface SttError {
   recovered: boolean; // a cloud failure the local model covered
 }
 
+export const STOP_FAILED_MESSAGE = "Couldn't stop listening. Try again, or press ⌘Esc to stop everything.";
+
 const ZERO_LEVELS: AudioLevels = { interviewer: 0, candidate: 0 };
 // Idle also clears what only means something while listening
 const MEETING_IDLE = {
@@ -106,8 +108,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().meetingStatus !== "idle") return;
     set({ meetingStatus: "starting", meetingError: null, sttError: null });
     try {
-      await invokeInTauri("start_audio_capture", { config: null });
-      set({ meetingStatus: "live", meetingStartedAt: Date.now() });
+      // Warnings name the sources that did not start; outside Tauri there is nothing to start
+      const warnings = (await invokeInTauri<string[]>("start_audio_capture", { config: null })) ?? [];
+      set({
+        meetingStatus: "live",
+        meetingStartedAt: Date.now(),
+        meetingError: warnings.length > 0 ? warnings.join(" ") : null,
+      });
     } catch (err) {
       // A panic during start cancels it; that isn't an error to show next time
       set({ ...MEETING_IDLE, meetingError: get().isPanicked ? null : String(err) });
@@ -120,9 +127,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await invokeInTauri("stop_audio_capture");
       set({ ...MEETING_IDLE, meetingError: null });
-    } catch (err) {
+    } catch {
       // Capture may still be running, so stay live and say so
-      set({ meetingStatus: "live", meetingError: String(err) });
+      set({ meetingStatus: "live", meetingError: STOP_FAILED_MESSAGE });
     }
   },
 

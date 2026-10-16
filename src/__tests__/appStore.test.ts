@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useAppStore, setupAppEventListeners, toggleMeeting } from "../store/appStore";
+import { useAppStore, setupAppEventListeners, toggleMeeting, STOP_FAILED_MESSAGE } from "../store/appStore";
 import { useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
+import * as ipc from "../lib/ipc";
 
 describe("useAppStore", () => {
   beforeEach(() => {
@@ -177,6 +178,22 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().meetingStatus).toBe("idle");
     unlisten();
     vi.doUnmock("@tauri-apps/api/event");
+  });
+
+  it("a partial start stays live with its warnings, and a failed stop says so", async () => {
+    const spy = vi
+      .spyOn(ipc, "invokeInTauri")
+      .mockResolvedValueOnce(["System audio is off: Screen Recording isn't allowed."]);
+
+    await useAppStore.getState().startMeeting();
+    expect(useAppStore.getState().meetingStatus).toBe("live");
+    expect(useAppStore.getState().meetingError).toBe("System audio is off: Screen Recording isn't allowed.");
+
+    spy.mockRejectedValueOnce(new Error("lock poisoned"));
+    await useAppStore.getState().stopMeeting();
+    expect(useAppStore.getState().meetingStatus).toBe("live");
+    expect(useAppStore.getState().meetingError).toBe(STOP_FAILED_MESSAGE);
+    spy.mockRestore();
   });
 
   // Keep last: it resets the module registry.

@@ -154,15 +154,16 @@ impl AudioState {
     }
 
     /// Starts audio capture on both channels according to configuration.
+    /// Returns plain-language warnings for any channel that did not start. Errs only when nothing started.
     /// Does nothing if capture is already running, so repeated starts never stack streams.
     pub fn start<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         config: AudioCaptureConfig,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
         if self.is_capturing.load(Ordering::SeqCst) {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // Reset panic state when explicitly starting audio capture
@@ -184,7 +185,7 @@ impl AudioState {
             *mixer_guard = AudioMixer::new(vad_config);
         }
 
-        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
 
         // 2. Channel 0: ScreenCaptureKit System Audio (Interviewer)
         if config.capture_interviewer {
@@ -195,7 +196,7 @@ impl AudioState {
                 }
                 Err(e) => {
                     eprintln!("[Sidekick Audio] ScreenCaptureKit startup warning: {e}");
-                    errors.push(format!("ScreenCaptureKit: {e}"));
+                    warnings.push(friendly_warning(Channel::Interviewer, &e));
                 }
             }
         } else {
@@ -214,7 +215,7 @@ impl AudioState {
                 }
                 Err(e) => {
                     eprintln!("[Sidekick Audio] Microphone startup warning: {e}");
-                    errors.push(format!("Microphone: {e}"));
+                    warnings.push(friendly_warning(Channel::Candidate, &e));
                 }
             }
         } else {
@@ -241,16 +242,16 @@ impl AudioState {
                 "is_interviewer_capturing": snapshot.is_interviewer_capturing,
                 "is_candidate_capturing": snapshot.is_candidate_capturing,
                 "stt_engine": snapshot.stt_engine,
-                "warnings": errors,
+                "warnings": warnings,
             }),
         );
 
-        // If both failed and were requested, return an error
-        if !any_active && (!errors.is_empty()) {
-            return Err(format!("Failed to start audio ingestion: {}", errors.join("; ")));
+        // Nothing started: the warnings say what to fix. Otherwise the session runs and the HUD shows them.
+        if !any_active && !warnings.is_empty() {
+            return Err(warnings.join(" "));
         }
 
-        Ok(())
+        Ok(warnings)
     }
 
     /// Callback for one channel: meters its level, feeds the mixer, and queues finished turns for STT
@@ -353,6 +354,23 @@ impl AudioState {
     }
 }
 
+const SCREEN_RECORDING_HINT: &str = "Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Screen Recording, then restart Sidekick.";
+const MICROPHONE_HINT: &str = "Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Microphone, then restart Sidekick.";
+
+/// Plain-language startup warning for one channel, saying what the user can do next
+fn friendly_warning(channel: Channel, raw: &str) -> String {
+    match (channel, raw) {
+        (Channel::Interviewer, sck_audio::SCREEN_RECORDING_DENIED) => {
+            format!("System audio is off: Screen Recording isn't allowed. {SCREEN_RECORDING_HINT}")
+        }
+        (Channel::Interviewer, _) => format!("System audio is off: {raw}"),
+        (Channel::Candidate, mic_audio::MIC_ACCESS_DENIED) => {
+            format!("Microphone is off: access is denied or restricted. {MICROPHONE_HINT}")
+        }
+        (Channel::Candidate, _) => format!("Microphone is off: {raw}"),
+    }
+}
+
 fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, interviewer: f32, candidate: f32) {
     let _ = app.emit(
         EVENT_AUDIO_LEVEL,
@@ -366,12 +384,12 @@ pub mod commands {
     use tauri::State;
 
     /// Starts audio capture via ScreenCaptureKit (interviewer) and Microphone (candidate).
-    /// Async so the blocking ScreenCaptureKit start runs off the main thread.
+    /// Returns warnings for a partial start. Async so the blocking ScreenCaptureKit start runs off the main thread.
     #[tauri::command]
     pub async fn start_audio_capture(
         app: AppHandle,
         config: Option<AudioCaptureConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<AudioState>().start(&app, config.unwrap_or_default())
         })
@@ -506,5 +524,31 @@ mod tests {
 
         state.dispatcher.set_engine("deepgram").unwrap();
         assert_eq!(state.snapshot().stt_engine, "deepgram");
+    }
+
+    #[test]
+    fn test_friendly_warning_explains_denied_permissions() {
+        assert_eq!(
+            friendly_warning(Channel::Interviewer, sck_audio::SCREEN_RECORDING_DENIED),
+            "System audio is off: Screen Recording isn't allowed. Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Screen Recording, then restart Sidekick."
+        );
+        assert_eq!(
+            friendly_warning(Channel::Candidate, mic_audio::MIC_ACCESS_DENIED),
+            "Microphone is off: access is denied or restricted. Turn on Sidekick (or the app you started it from, such as Terminal) in System Settings → Privacy & Security → Microphone, then restart Sidekick."
+        );
+    }
+
+    #[test]
+    fn test_friendly_warning_keeps_other_errors() {
+        assert_eq!(friendly_warning(Channel::Interviewer, "no display"), "System audio is off: no display");
+        assert_eq!(friendly_warning(Channel::Candidate, "no device"), "Microphone is off: no device");
+    }
+
+    #[test]
+    fn test_mic_status_blocks_only_denied_or_restricted() {
+        assert!(!mic_audio::mic_status_blocks(0), "not determined must still open, so macOS can prompt");
+        assert!(mic_audio::mic_status_blocks(1), "restricted");
+        assert!(mic_audio::mic_status_blocks(2), "denied");
+        assert!(!mic_audio::mic_status_blocks(3), "authorized");
     }
 }

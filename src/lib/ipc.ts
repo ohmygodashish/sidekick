@@ -18,11 +18,12 @@ export async function safeInvoke<T>(
 }
 
 /**
- * Invokes a Tauri command and rethrows its failure. A no-op outside Tauri (tests, browser).
+ * Invokes a Tauri command and rethrows its failure. A no-op outside Tauri (tests, browser), which returns undefined.
  */
-export async function invokeInTauri(cmd: string, args?: Record<string, unknown>): Promise<void> {
+export async function invokeInTauri<T = void>(cmd: string, args?: Record<string, unknown>): Promise<T | undefined> {
   const { invoke, isTauri } = await import("@tauri-apps/api/core");
-  if (typeof isTauri === "function" && isTauri()) await invoke(cmd, args);
+  if (typeof isTauri === "function" && isTauri()) return await invoke<T>(cmd, args);
+  return undefined;
 }
 
 /**
