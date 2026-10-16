@@ -449,8 +449,7 @@ sidekick/
 │   └── build-macos.sh              # Production build, codesign, and DMG packaging script
 ├── docs/
 │   ├── spec-architecture-sidekick-copilot.md  # Core architectural specification
-│   ├── cluely-parity-plan.md       # Current decisions, shortcut map and phases
-│   └── archive/                    # Superseded: original build plan, usability overhaul plan, 16 Oct audit
+│   └── cluely-parity-plan.md       # Current decisions, shortcut map and phases
 ├── src/                            # React 19 Frontend Webview
 │   ├── __tests__/                  # Vitest unit and integration test suites
 │   ├── components/

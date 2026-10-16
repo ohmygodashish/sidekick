@@ -1,7 +1,7 @@
 # Cluely parity and polish plan (16 Oct 2026)
 
 Decided with the user in a grill-me session, using screenshots of Cluely 2.1.24 (pill, mode menu, answer panel, Settings: General, Modes, Keybinds, About). Branch: `cluely-parity`, cut from `fix/usability-overhaul`, at least one commit per phase, local only.
-Builds on [`overhaul-plan.md`](archive/overhaul-plan.md); its decisions still hold unless changed here. Audit IDs refer to [`audit.md`](archive/audit.md).
+Builds on the usability overhaul (PR #1); its decisions still hold unless changed here. Open findings from the earlier audits are tracked as [GitHub issues](https://github.com/ohmygodashish/sidekick/issues).
 
 ## Goals
 
@@ -64,4 +64,4 @@ Agent assignment per phase follows the workflow in memory (`subagent-workflow`):
 
 ## Out of scope
 
-Undetectability toggle, launch at login, update checker, calendar, notifications, billing, editable keybinds, per-mode resume and files, persistent history, build and signing (S4/S5), CSP (S2), minimum macOS (S9).
+Undetectability toggle, launch at login, update checker, calendar, notifications, billing, editable keybinds, per-mode resume and files, persistent history, build and signing ([#4](https://github.com/ohmygodashish/sidekick/issues/4)), CSP ([#3](https://github.com/ohmygodashish/sidekick/issues/3)), minimum macOS ([#5](https://github.com/ohmygodashish/sidekick/issues/5)).
