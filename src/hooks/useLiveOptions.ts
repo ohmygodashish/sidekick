@@ -59,11 +59,10 @@ export function useLiveOptions() {
 
       const controller = new AbortController();
       inFlight = controller;
-      const { apiKeys, evaluatorModel, activeModeId, modes } = useSettingsStore.getState();
+      const { apiKeys, activeModeId, modes } = useSettingsStore.getState();
       try {
         const result = await fetchLiveOptions(turns, {
           apiKey: apiKeys.groq,
-          model: evaluatorModel,
           signal: controller.signal,
           mode: resolveMode(activeModeId, modes),
         });

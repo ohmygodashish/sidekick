@@ -11,13 +11,9 @@ import {
   currentSystemParts,
   solutionToText,
 } from "../services/ai/promptTemplates";
-import {
-  dispatchDeepSolve,
-  getDefaultModelForProvider,
-  mimeTypeOfDataUrl,
-  reasoningFor,
-} from "../services/ai/dispatcher";
+import { dispatchDeepSolve, mimeTypeOfDataUrl, reasoningFor } from "../services/ai/dispatcher";
 import { assistTurns, formatTranscript, formatTurns } from "../services/ai/liveOptions";
+import { activeModel } from "../services/ai/models";
 import { initPrefetch, takePrefetch } from "./prefetch";
 
 type SolveOptions = Omit<SolveRequest, "question">;
@@ -131,7 +127,7 @@ export function useDeepSolver() {
         const settings = useSettingsStore.getState();
         const provider = settings.selectedProvider || "openrouter";
         const apiKey = settings.apiKeys[provider] || "";
-        const model = settings.selectedModel || getDefaultModelForProvider(provider);
+        const model = activeModel(settings);
 
         // 3. Assemble personalized prompts (REQ-016); earlier answers of the thread are the follow-up context
         const { prefix: systemPrefix, suffix: systemSuffix } = currentSystemParts(settings);

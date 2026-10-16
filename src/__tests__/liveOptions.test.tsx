@@ -28,7 +28,7 @@ function groqResponse(content: string, status = 200): Response {
 }
 
 const setGroqKey = (groq: string) =>
-  useSettingsStore.setState((s) => ({ apiKeys: { ...s.apiKeys, groq }, evaluatorModel: "groq/qwen/qwen3.8-27b" }));
+  useSettingsStore.setState((s) => ({ apiKeys: { ...s.apiKeys, groq } }));
 
 function HookHost() {
   useLiveOptions();
@@ -87,7 +87,7 @@ describe("live options service", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("bad key", { status: 401 }));
     const err = await fetchLiveOptions([turn("interviewer", "Hi")], { apiKey: "gsk-bad" }).catch((e) => e);
     expect(err).toBeInstanceOf(ProviderHttpError);
-    expect(liveOptionsErrorMessage(err)).toBe("Groq rejected the API key. Check it in Settings → Keys.");
+    expect(liveOptionsErrorMessage(err)).toBe("Groq rejected the API key. Check it in Settings → General.");
     expect(liveOptionsErrorMessage(new Error("boom"))).toBe("Live options are unavailable right now.");
   });
 
@@ -233,7 +233,7 @@ describe("LiveOptions and CaptionLine", () => {
 
   it("explains what's missing when there are no options yet", () => {
     const { rerender } = render(<LiveOptions />);
-    expect(screen.getByText("Add a Groq key in Settings → Keys to see likely questions.")).toBeDefined();
+    expect(screen.getByText("Add a Groq key in Settings → General to see likely questions.")).toBeDefined();
     setGroqKey("gsk-test");
     rerender(<LiveOptions />);
     expect(screen.getByText("Questions appear here as the conversation goes.")).toBeDefined();

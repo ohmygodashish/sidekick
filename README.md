@@ -50,11 +50,11 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
 
 - **Invisible to Screen Sharing**: Never appears in Zoom, Google Meet, Microsoft Teams, Slack huddles, OBS Studio, Discord, or QuickTime Screen Recordings.
 - **Headless Phantom Operation**: No Dock tile, no Menu Bar icon, and excluded from `Cmd + Tab`. You summon it purely through muscle-memory hardware hotkeys.
-- **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu). While a meeting is live, a caption and three live options sit under it, with one panel below for answers or settings. Clicks pass through everywhere except the visible pieces. Dark and light themes (Settings → Appearance). Compact view leaves only the bar.
+- **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu). While a meeting is live, a caption and three live options sit under it, with one panel below for answers or settings. Clicks pass through everywhere except the visible pieces. Dark and light themes (Settings → General). Compact view leaves only the bar.
 - **Driverless Dual-Channel Audio**: Simultaneously captures remote meeting audio via Apple's macOS 13+ `ScreenCaptureKit` and your microphone via CoreAudio—no virtual audio cables (BlackHole, Soundflower, Loopback) required.
 - **On-Device Metal AI or Cloud Fallback**: Runs 100% offline Metal GPU-accelerated `whisper.cpp` transcription, with a one-click switch to Groq Whisper for cloud transcription.
 - **Live Options**: While you talk, three numbered questions keep updating: the one the interviewer just asked (pinned in slot 1) and the ones they're likely to ask next. Press <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> or click one to get its answer.
-- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Groq or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. Nothing is ever invented: a missing key, a provider error or a stalled stream shows a short error instead of an answer, and speech-to-text failures show in the caption instead of made-up words.
+- **Progressive Answers**: Answers stream from Anthropic, OpenAI or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. Nothing is ever invented: a missing key, a provider error or a stalled stream shows a short error instead of an answer, and speech-to-text failures show in the caption instead of made-up words.
 - **Local Key Storage**: API keys and settings live in a local config file (`~/.config/sidekick/config.json`, readable only by your macOS user). Session data is held in an ephemeral SQLite database that is scrubbed on panic or single-click burn.
 
 ```
@@ -108,8 +108,8 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
    - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top-centre of the screen, just under the menu bar.
 4. **Configure Your API Keys**:
    - Press <kbd>Cmd</kbd> + <kbd>,</kbd> (or open the **⋯** menu and choose **Settings**).
-   - In the **Keys** tab, enter your provider keys: Groq for live options and fast transcription, and one of OpenRouter/Anthropic/OpenAI (or Groq) for full answers. The answer model is chosen per provider; switching provider switches to that provider's default model.
-   - Click **Save keys**. Keys are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
+   - In the **General** tab, pick the answer provider (Anthropic, OpenAI or OpenRouter), enter its key and choose a model, then enter a Groq key for live options and fast transcription.
+   - Keys save when you leave the field. They are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
 5. **Start a Meeting**:
    - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows two level dots (sky = system audio, orange = microphone) and the elapsed time, and the caption and live options appear under the bar.
    - The first time, macOS asks for two permissions:
@@ -132,7 +132,7 @@ Sidekick is operated completely through global hardware keyboard shortcuts that 
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | **Toggle Compact View** | Hides the answer panel and leaves only the control bar. Press again to bring the panel back. |
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> | **Silent Window Vision** | Silently captures the problem description/diagram from the frontmost coding window without crosshairs or sounds. |
 | <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> | **Answer an option** | Answers live option 1, 2 or 3, with the recent conversation as context. Works while the meeting app has focus, and brings a hidden overlay back. |
-| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings** | Opens the settings panel (Keys, Profile, Audio, Appearance, Danger) under the bar. Works while Sidekick has focus. |
+| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings** | Opens the settings panel (General, Profile, Modes, Audio, Keybinds) under the bar. Works while Sidekick has focus. |
 
 ---
 
@@ -206,20 +206,20 @@ The answer streams into one panel:
 - **Code** is expanded by default; click its row to collapse it. **Copy** puts the code on your clipboard.
 - **Complexity** is collapsed by default; expand it to see edge cases.
 
-#### Thinking (reasoning) settings
-In Settings $\rightarrow$ **Keys**, under the solution model, two switches and a level control how hard the answer model thinks:
-- **Think before answering** (on, at Medium by default) applies to typed questions and <kbd>Cmd</kbd> + <kbd>Return</kbd> Assist. Off turns thinking off where the model allows it.
-- **Thinking level** (Low, Medium or High) sets how much the model thinks when thinking is on.
-- **Also think for picked options** (off by default) applies the same level to option picks and the background answer for the asked question. Off keeps picks fast.
+#### Models and thinking
+Settings $\rightarrow$ **General** starts with **Appearance** (System, Light or Dark) and ends with a folded **Advanced** section (Burn session and Reset settings). In between are three parts:
+- **Solution models**: pick Anthropic, OpenAI or OpenRouter. Only that provider's card shows: its API key and a model list. Each provider remembers its own model.
+  - **Anthropic**: Claude Haiku 5.5 (default), Sonnet 5.5, Opus 5.5.
+  - **OpenAI**: GPT-6 Luna (default), GPT-6.1 Sol.
+  - **OpenRouter**: all five, with Haiku 5.5 as the default.
+- **Thinking**: two switches and a level control how hard the answer model thinks.
+  - **Think before answering** (on, at Medium by default) applies to typed questions and <kbd>Cmd</kbd> + <kbd>Return</kbd> Assist.
+  - **Thinking level** (Low, Medium or High) sets how much the model thinks.
+  - **Also think for picked options** (off by default) applies the same level to option picks and the background answer for the asked question. Off keeps picks fast.
+  - Sonnet 5.5, Opus 5.5 and GPT-6.1 Sol can't turn thinking off. With them, both switches show on and greyed out, and every answer uses the chosen level. Your own switch settings come back when you pick Haiku 5.5 or GPT-6 Luna.
+- **Evaluator model**: Groq with Qwen 3.8 27B, for live options. The Groq key is also used by Groq speech-to-text. To stop using Groq for speech, pick **On this Mac** in Audio.
 
-The settings apply to these models, through Anthropic, OpenAI or OpenRouter:
-- **Anthropic (direct)**: Claude Haiku 5.5 (`claude-haiku-5-5`), Sonnet 5 and 5.5 (`claude-sonnet-5`, `claude-sonnet-5-5`), Sonnet 4.6, Opus 4.5 and later (including `claude-opus-5-5`), and Fable.
-- **OpenAI (direct)**: GPT-5.x (for example `gpt-5.6-luna`), GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6-astra`, `gpt-6.1-sol`) and the o-series reasoning models.
-- **OpenRouter**: the same models with an `anthropic/` or `openai/` prefix, for example `anthropic/claude-haiku-5.5` or `openai/gpt-5.6-luna`.
-
-Other models and providers don't take the setting, and their switches are greyed out. That covers Groq, other OpenRouter models, and older generations such as Claude 3.5 or GPT-4o.
-
-Some models always think. For these, Off sends nothing and the model uses its default level: `claude-opus-5-5`, Fable and Mythos, OpenRouter's `anthropic/claude-sonnet-5.5`, `gpt-6-astra`, `gpt-6.1-sol`, and the GPT-5 models other than GPT-5.6 (for example `gpt-5` and `gpt-5-mini`). Settings says so under the switch. If a provider refuses the thinking setting with an error, Sidekick retries the answer once without it.
+Keys save when you leave the field and when Settings closes. If a provider refuses the thinking setting with an error, Sidekick retries the answer once without it.
 
 #### Personalization Profiles
 In Settings $\rightarrow$ **Profile** (`Cmd + ,`), configure:
@@ -275,7 +275,7 @@ The file looks like this:
 - **Writes**: Each save writes a temp file and renames it over the old one. Writes are serialized with a lock.
 - **Corrupt file**: If the file cannot be parsed, it is renamed to `config.json.corrupt-<unix seconds>` and Sidekick starts a fresh file. Unknown top-level keys are kept.
 - **Settings**: Provider, models, speech-to-text engine, persona and tone, target company, job description, resume text, and layout preferences are stored in this file, not in browser storage. Settings saved by an older build are moved here automatically on first launch.
-- **Supported Providers**: **OpenRouter**, **Anthropic Direct**, **OpenAI Direct** and **Groq Cloud**. Speech-to-text runs on this Mac or on Groq.
+- **Supported Providers**: Answers from **OpenRouter**, **Anthropic Direct** or **OpenAI Direct**; live options from **Groq Cloud**. Speech-to-text runs on this Mac or on Groq.
 - **Burn Session** does not touch this file. **Reset Settings** restores the default settings but keeps your API keys.
 
 #### Editing, Backing Up, and Moving Keys
@@ -298,7 +298,7 @@ The file works like `~/.aws/credentials` or `~/.npmrc`:
 - `cargo test` no longer touches real credentials.
 
 #### Upgrading from the Keychain Build
-- Keys saved in the old Keychain were **not** migrated. Re-enter them once in **Settings → Keys**.
+- Keys saved in the old Keychain were **not** migrated. Re-enter them once in **Settings → General**.
 - Optionally, delete the old entries. Repeat for each provider (`openrouter`, `anthropic`, `openai`, `groq`):
 
 ```bash
@@ -322,8 +322,8 @@ If someone walks behind you, your interviewer asks you to share your entire desk
   6. The meeting ends and audio capture stops. Click **Start** to listen again.
 - **To unhide**: Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> once safe.
 
-#### The "Burn Session" Button (Danger Zone)
-Inside Settings (`Cmd + ,` $\rightarrow$ **Danger**):
+#### The "Burn Session" Button
+Inside Settings (`Cmd + ,` $\rightarrow$ **General** $\rightarrow$ **Advanced**, folded at the bottom of the tab):
 - Click the red **Burn** button, then click it again within 3 seconds to confirm. It:
   - Checkpoints and closes SQLite WAL files.
   - Drops all transcript turns, questions, and solution records.

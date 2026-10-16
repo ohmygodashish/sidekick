@@ -2,11 +2,14 @@ import { create } from "zustand";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { invokeInTauri, safeInvoke } from "../lib/ipc";
-import { getDefaultModelForProvider } from "../services/ai/dispatcher";
+import { modelFor, SOLUTION_MODELS } from "../services/ai/models";
 import { CODING_MODE_ID, GENERAL_MODE_ID, type CustomMode } from "../services/ai/modes";
 import { useSessionStore } from "./sessionStore";
 
 export type ApiProvider = "openrouter" | "anthropic" | "openai" | "groq";
+
+/** Providers that answer questions. Groq only runs live options and speech-to-text. */
+export type SolutionProvider = Exclude<ApiProvider, "groq">;
 
 export type SttMode = "whisper_local" | "groq";
 
@@ -57,9 +60,9 @@ export interface SettingsState {
   apiKeys: Record<ApiProvider, string>;
 
   // Model & Provider Selection
-  selectedProvider: ApiProvider;
-  selectedModel: string;
-  evaluatorModel: string;
+  selectedProvider: SolutionProvider;
+  /** Each provider keeps its own chosen model, so switching provider keeps them all */
+  selectedModels: Record<SolutionProvider, string>;
 
   // Personalization Context
   profile: PersonalizationProfile;
@@ -90,11 +93,9 @@ export interface SettingsState {
   // Actions
   setApiKey: (provider: ApiProvider, key: string) => void;
   saveApiKeyToBackend: (provider: ApiProvider, key: string) => Promise<void>;
-  saveAllApiKeysToBackend: () => Promise<void>;
   loadApiKeysFromBackend: () => Promise<void>;
-  setSelectedProvider: (provider: ApiProvider) => void;
-  setSelectedModel: (model: string) => void;
-  setEvaluatorModel: (model: string) => void;
+  setSelectedProvider: (provider: SolutionProvider) => void;
+  setProviderModel: (provider: SolutionProvider, model: string) => void;
   setProfile: (profile: Partial<PersonalizationProfile>) => void;
   setSeniority: (seniority: SeniorityPreset) => void;
   setTone: (tone: TonePreset) => void;
@@ -130,9 +131,12 @@ const defaultState = {
     openai: "",
     groq: "",
   },
-  selectedProvider: "openrouter" as ApiProvider,
-  selectedModel: "anthropic/claude-haiku-5.5",
-  evaluatorModel: "qwen/qwen3.8-27b",
+  selectedProvider: "openrouter" as SolutionProvider,
+  selectedModels: {
+    anthropic: modelFor("anthropic"),
+    openai: modelFor("openai"),
+    openrouter: modelFor("openrouter"),
+  },
   profile: defaultProfile,
   sttMode: "whisper_local" as SttMode,
   sttLanguage: "en" as SttLanguage,
@@ -169,16 +173,6 @@ function followModeScreen(from: string, to: string) {
     useSessionStore.setState({ optionsUseScreen: to === CODING_MODE_ID });
   }
 }
-
-// Old defaults that were replaced; migrated once when persist version goes 0 -> 1
-const STALE_SELECTED_MODELS = [
-  "anthropic/claude-3.5-sonnet",
-  "claude-3-5-sonnet-20241022",
-  "gpt-4o",
-  "gemini-2.0-flash",
-  "llama-3.3-70b-versatile",
-];
-const STALE_EVALUATOR_MODELS = ["groq/llama-3.3-70b-versatile", "llama-3.3-70b-versatile"];
 
 // Settings live in ~/.config/sidekick/config.json (via load_settings / save_settings).
 // Outside Tauri this is plain localStorage, kept synchronous so tests hydrate immediately.
@@ -231,14 +225,6 @@ export const useSettingsStore = create<SettingsState>()(
         await invokeInTauri("store_api_key", { provider, key: trimmed });
       },
 
-      saveAllApiKeysToBackend: async () => {
-        const keys = get().apiKeys;
-        for (const [provider, key] of Object.entries(keys)) {
-          // Always propagate key to backend, including empty/cleared strings (""), so deleted keys are wiped
-          await invokeInTauri("store_api_key", { provider, key: (key || "").trim() });
-        }
-      },
-
       loadApiKeysFromBackend: async () => {
         const providers: ApiProvider[] = ["openrouter", "anthropic", "openai", "groq"];
         for (const p of providers) {
@@ -251,13 +237,10 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
 
-      // A model id from one provider fails on another, so switching provider resets the model
-      setSelectedProvider: (provider) =>
-        set({ selectedProvider: provider, selectedModel: getDefaultModelForProvider(provider) }),
+      setSelectedProvider: (provider) => set({ selectedProvider: provider }),
 
-      setSelectedModel: (model) => set({ selectedModel: model }),
-
-      setEvaluatorModel: (model) => set({ evaluatorModel: model }),
+      setProviderModel: (provider, model) =>
+        set((state) => ({ selectedModels: { ...state.selectedModels, [provider]: model } })),
 
       setProfile: (partialProfile) =>
         set((state) => ({
@@ -326,7 +309,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       resetSettings: () => {
         const previousMode = get().activeModeId;
-        // Keep API keys and custom modes: a reset followed by "Save keys" would otherwise delete the keys from the config file
+        // Keep API keys and custom modes: keys live in the config file, and a reset must not blank the fields that save them
         set((state) => ({ ...defaultState, apiKeys: state.apiKeys, modes: state.modes }));
         followModeScreen(previousMode, defaultState.activeModeId);
         void safeInvoke("set_stt_engine", { engine: defaultState.sttMode }).then(pushSttLanguage);
@@ -335,17 +318,10 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "sidekick-settings",
-      version: 4,
+      version: 5,
       migrate: (persisted, fromVersion) => {
-        const state = (persisted ?? {}) as Partial<SettingsState>;
-        if (fromVersion < 1) {
-          if (STALE_EVALUATOR_MODELS.includes(state.evaluatorModel ?? "")) {
-            state.evaluatorModel = defaultState.evaluatorModel;
-          }
-          if (STALE_SELECTED_MODELS.includes(state.selectedModel ?? "")) {
-            state.selectedModel = getDefaultModelForProvider(state.selectedProvider ?? "openrouter");
-          }
-        }
+        // selectedModel and evaluatorModel are v4 keys: v5 reads selectedModel once, then drops both
+        const state = (persisted ?? {}) as Partial<SettingsState> & { selectedModel?: string; evaluatorModel?: string };
         if (fromVersion < 2) {
           // Modes, languages and the microphone start at their defaults
           state.modes ??= defaultState.modes;
@@ -361,14 +337,30 @@ export const useSettingsStore = create<SettingsState>()(
           state.pickThinking ??= defaultState.pickThinking;
         }
         if (fromVersion < 4) {
-          // Deepgram and Gemini are gone: Deepgram speech-to-text moves to Groq, Gemini answers move to OpenRouter
+          // Deepgram speech-to-text moves to Groq
           if ((state.sttMode as string | undefined) === "deepgram") state.sttMode = "groq";
-          if ((state.selectedProvider as string | undefined) === "gemini") {
-            state.selectedProvider = "openrouter";
-            state.selectedModel = getDefaultModelForProvider("openrouter");
-          }
+        }
+        if (fromVersion < 5) {
+          // Groq and Gemini answers are gone: any other provider falls back to OpenRouter. The old model
+          // goes to the active provider, and an unlisted one becomes that provider's default.
+          const known = ["anthropic", "openai", "openrouter"] as const;
+          const provider = known.find((p) => p === state.selectedProvider) ?? "openrouter";
+          state.selectedProvider = provider;
+          state.selectedModels = {
+            ...defaultState.selectedModels,
+            [provider]: modelFor(provider, state.selectedModel),
+          };
+          delete state.selectedModel;
+          delete state.evaluatorModel;
         }
         return state as SettingsState;
+      },
+      // The config file can be hand-edited: an unknown provider would break answers and Settings, so it falls back
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as Partial<SettingsState>) };
+        if (!Object.prototype.hasOwnProperty.call(SOLUTION_MODELS, merged.selectedProvider)) merged.selectedProvider = current.selectedProvider;
+        merged.selectedModels = { ...current.selectedModels, ...merged.selectedModels };
+        return merged;
       },
       storage: createJSONStorage(() => configFileStorage),
       partialize: (state) => {

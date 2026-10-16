@@ -169,7 +169,7 @@ fn cloud_failure_message(engine: SttEngineType, err: &CloudError, recovered: boo
         SttEngineType::WhisperLocal => "Local Whisper",
     };
     match err {
-        CloudError::MissingKey => format!("Add your {name} API key in Settings → Keys to transcribe."),
+        CloudError::MissingKey => format!("Add your {name} API key in Settings → General to transcribe."),
         CloudError::Rejected => format!("{name} rejected the API key."),
         CloudError::Failed(reason) => {
             let note = if recovered { " Used the local model instead." } else { "" };
@@ -654,7 +654,7 @@ mod tests {
         use CloudError::*;
         assert_eq!(
             cloud_failure_message(SttEngineType::Groq, &MissingKey, false),
-            "Add your Groq API key in Settings → Keys to transcribe."
+            "Add your Groq API key in Settings → General to transcribe."
         );
         assert_eq!(
             cloud_failure_message(SttEngineType::Groq, &Rejected, true),

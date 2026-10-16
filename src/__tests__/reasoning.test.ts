@@ -8,9 +8,9 @@ describe("reasoningSupport", () => {
     // [provider, model, supported, canDisable]
     ["anthropic", "claude-haiku-5-5", true, true],
     ["anthropic", "claude-sonnet-5", true, true],
-    // Sonnet 5.5 turns thinking off with between_tools on the direct API
-    ["anthropic", "claude-sonnet-5-5", true, true],
-    ["anthropic", "claude-sonnet-5.5", true, true],
+    // Sonnet 5.5 always thinks, on every provider
+    ["anthropic", "claude-sonnet-5-5", true, false],
+    ["anthropic", "claude-sonnet-5.5", true, false],
     ["anthropic", "claude-opus-5", true, true],
     ["anthropic", "claude-opus-5-5", true, false],
     ["anthropic", "claude-fable-1", true, false],
@@ -45,7 +45,6 @@ describe("reasoningSupport", () => {
     ["openrouter", "anthropic/claude-opus-5.5", true, false],
     ["openrouter", "anthropic/claude-fable-5", true, false],
     ["openrouter", "anthropic/claude-fable-5.1", true, false],
-    // OpenRouter's Sonnet 5.5 has no "none", unlike the direct API
     ["openrouter", "anthropic/claude-sonnet-5.5", true, false],
     ["openrouter", "openai/gpt-5.6-luna", true, true],
     ["openrouter", "openai/gpt-6-astra", true, false],

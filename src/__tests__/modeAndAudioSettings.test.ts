@@ -133,7 +133,7 @@ describe("persisted settings migration (version 1 -> 2)", () => {
   const migrate = useSettingsStore.persist.getOptions().migrate!;
 
   it("gives the new fields their defaults and keeps the saved ones", () => {
-    const migrated = migrate({ selectedModel: "anthropic/claude-haiku-5.5", sttMode: "groq" }, 1) as SettingsState;
+    const migrated = migrate({ sttMode: "groq" }, 1) as SettingsState;
 
     expect(migrated.modes).toEqual([]);
     expect(migrated.activeModeId).toBe("general");

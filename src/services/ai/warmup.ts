@@ -1,5 +1,6 @@
-import type { ApiProvider, SettingsState } from "../../store/settingsStore";
-import { getDefaultModelForProvider, reasoningFor } from "./dispatcher";
+import type { SettingsState, SolutionProvider } from "../../store/settingsStore";
+import { reasoningFor } from "./dispatcher";
+import { activeModel } from "./models";
 import { ANTHROPIC_ENDPOINT, anthropicHeaders, buildAnthropicPayload } from "./anthropic";
 import { OPENROUTER_ENDPOINT, buildOpenRouterPayload, openRouterHeaders } from "./openrouter";
 import { sentReasoning } from "./reasoning";
@@ -11,7 +12,7 @@ import { isPromptCacheWarm, markPromptCache, promptCacheFingerprint } from "./pr
 export type WarmSettings = Pick<
   SettingsState,
   | "selectedProvider"
-  | "selectedModel"
+  | "selectedModels"
   | "apiKeys"
   | "profile"
   | "activeModeId"
@@ -23,11 +24,10 @@ export type WarmSettings = Pick<
 >;
 
 const GROQ_ORIGIN = "https://api.groq.com";
-const ORIGINS: Partial<Record<ApiProvider, string>> = {
+const ORIGINS: Record<SolutionProvider, string> = {
   openrouter: "https://openrouter.ai",
   anthropic: "https://api.anthropic.com",
   openai: "https://api.openai.com",
-  groq: GROQ_ORIGIN,
 };
 
 const ORIGIN_GAP_MS = 30_000;
@@ -46,8 +46,7 @@ function headOrigin(origin: string): void {
 
 /** Opens connections to the answer provider, and to Groq when its key is set (live options). Never throws. */
 export function warmConnections(settings: WarmSettings): void {
-  const origin = ORIGINS[settings.selectedProvider || "openrouter"];
-  if (origin) headOrigin(origin);
+  headOrigin(ORIGINS[settings.selectedProvider || "openrouter"]);
   if (settings.apiKeys.groq?.trim()) headOrigin(GROQ_ORIGIN);
 }
 
@@ -60,7 +59,7 @@ export function warmConnections(settings: WarmSettings): void {
  */
 export async function warmPromptCache(settings: WarmSettings): Promise<void> {
   const provider = settings.selectedProvider || "openrouter";
-  const model = settings.selectedModel || getDefaultModelForProvider(provider);
+  const model = activeModel(settings);
   const viaOpenRouter = provider === "openrouter" && model.startsWith("anthropic/");
   const apiKey = (settings.apiKeys[provider] || "").trim();
   if (!apiKey || (provider !== "anthropic" && !viaOpenRouter)) return;

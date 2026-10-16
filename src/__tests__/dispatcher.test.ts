@@ -56,14 +56,14 @@ describe("dispatchDeepSolve", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     await expect(
-      dispatchDeepSolve({ provider: "groq", apiKey: "  ", prompt: "Two sum", reasoning: "none" })
-    ).rejects.toMatchObject({ message: "Add your Groq API key in Settings → Keys." });
+      dispatchDeepSolve({ provider: "anthropic", apiKey: "  ", prompt: "Two sum", reasoning: "none" })
+    ).rejects.toMatchObject({ message: "Add your Anthropic API key in Settings → General." });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each([
-    [401, "bad key", "Anthropic rejected the API key. Check it in Settings → Keys."],
-    [403, "forbidden", "Anthropic rejected the API key. Check it in Settings → Keys."],
+    [401, "bad key", "Anthropic rejected the API key. Check it in Settings → General."],
+    [403, "forbidden", "Anthropic rejected the API key. Check it in Settings → General."],
     [404, "not found", 'Anthropic doesn\'t recognise the model "claude-haiku-5-5". Pick another in Settings.'],
     [400, "invalid model id", 'Anthropic doesn\'t recognise the model "claude-haiku-5-5". Pick another in Settings.'],
     [400, "messages missing", "Anthropic returned HTTP 400."],
@@ -186,9 +186,18 @@ describe("dispatchDeepSolve", () => {
 });
 
 describe("reasoningFor", () => {
-  type Thinking = Pick<SettingsState, "answerThinking" | "answerThinkingLevel" | "pickThinking">;
-  const off: Thinking = { answerThinking: false, answerThinkingLevel: "high", pickThinking: true };
+  // Haiku can turn thinking off, so these cases follow the switches
+  const haiku = {
+    selectedProvider: "openrouter" as const,
+    selectedModels: { openrouter: "anthropic/claude-haiku-5.5", anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
+  };
+  type Thinking = Pick<
+    SettingsState,
+    "answerThinking" | "answerThinkingLevel" | "pickThinking" | "selectedProvider" | "selectedModels"
+  >;
+  const off: Thinking = { ...haiku, answerThinking: false, answerThinkingLevel: "high", pickThinking: true };
   const on = (answerThinkingLevel: Thinking["answerThinkingLevel"], pickThinking = false): Thinking => ({
+    ...haiku,
     answerThinking: true,
     answerThinkingLevel,
     pickThinking,
@@ -210,6 +219,29 @@ describe("reasoningFor", () => {
     ["an unknown level falls back to medium for a pick", "option", on(bogus, true), "medium"],
   ])("%s", (_name, kind, settings, expected) => {
     expect(reasoningFor(kind, settings)).toBe(expected);
+  });
+});
+
+describe("reasoningFor on Sonnet 5.5, which always thinks", () => {
+  const settings = (model: string, answerThinking: boolean, pickThinking: boolean) => ({
+    selectedProvider: "openrouter" as const,
+    selectedModels: { openrouter: model, anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
+    answerThinking,
+    answerThinkingLevel: "low" as const,
+    pickThinking,
+  });
+
+  it("uses the chosen level for an option pick with picks off", () => {
+    expect(reasoningFor("option", settings("anthropic/claude-sonnet-5.5", true, false))).toBe("low");
+  });
+
+  it("uses the chosen level for a typed question with thinking off", () => {
+    expect(reasoningFor("typed", settings("anthropic/claude-sonnet-5.5", false, false))).toBe("low");
+  });
+
+  it("turns thinking off for Haiku when the switches are off", () => {
+    expect(reasoningFor("typed", settings("anthropic/claude-haiku-5.5", false, false))).toBe("none");
+    expect(reasoningFor("option", settings("anthropic/claude-haiku-5.5", true, false))).toBe("none");
   });
 });
 

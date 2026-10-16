@@ -2,7 +2,8 @@ import { useSessionStore, ProgressiveSolution } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import { buildUserPrompt, currentSystemParts } from "../services/ai/promptTemplates";
-import { dispatchDeepSolve, getDefaultModelForProvider, reasoningFor } from "../services/ai/dispatcher";
+import { dispatchDeepSolve, reasoningFor } from "../services/ai/dispatcher";
+import { activeModel } from "../services/ai/models";
 import { formatTranscript } from "../services/ai/liveOptions";
 
 /**
@@ -81,7 +82,7 @@ function startPrefetch(question: string) {
   dispatchDeepSolve({
     provider,
     apiKey: settings.apiKeys[provider] || "",
-    model: settings.selectedModel || getDefaultModelForProvider(provider),
+    model: activeModel(settings),
     prompt: buildUserPrompt(question, {
       transcript: formatTranscript(session.transcript),
       hasImage: false,
@@ -151,7 +152,7 @@ export function initPrefetch(): () => void {
       state.modes !== prev.modes ||
       state.outputLanguage !== prev.outputLanguage ||
       state.selectedProvider !== prev.selectedProvider ||
-      state.selectedModel !== prev.selectedModel ||
+      activeModel(state) !== activeModel(prev) ||
       state.profile !== prev.profile ||
       // Only the thinking that option picks run with matters here; a level change with picks off leaves it be
       reasoningFor("option", state) !== reasoningFor("option", prev)

@@ -67,7 +67,7 @@ export const LiveOptions: React.FC = () => {
         <p className="px-2.5 py-1.5 sk-meta">
           {hasGroqKey
             ? "Questions appear here as the conversation goes."
-            : "Add a Groq key in Settings → Keys to see likely questions."}
+            : "Add a Groq key in Settings → General to see likely questions."}
         </p>
       )}
       {error && <p className="px-2.5 py-1 text-[12px] text-sk-warn">{error}</p>}

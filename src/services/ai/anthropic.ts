@@ -5,12 +5,9 @@ import { reasoningSupport, sentReasoning } from "./reasoning";
 
 export const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 
-/** Sonnet 5.5 takes "between_tools" for "none" rather than "disabled". */
-const BETWEEN_TOOLS = /claude-sonnet-5[-.]5/;
-
 export interface ClaudeThinkingParams {
   max_tokens: number;
-  thinking?: { type: "disabled" | "between_tools" };
+  thinking?: { type: "disabled" };
   output_config?: { effort: "low" | "medium" | "high" };
 }
 
@@ -26,7 +23,6 @@ export function claudeThinkingParams(model: string, reasoning?: ReasoningMode): 
   const thinking = sentReasoning("anthropic", model, reasoning);
   if (!thinking) return { max_tokens: maxTokens };
   if (thinking !== "none") return { max_tokens: maxTokens, output_config: { effort: thinking } };
-  if (BETWEEN_TOOLS.test(model)) return { max_tokens: maxTokens, thinking: { type: "between_tools" } };
   return { max_tokens: maxTokens, thinking: { type: "disabled" } };
 }
 

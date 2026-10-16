@@ -69,9 +69,9 @@ describe("Claude thinking fields", () => {
     ["claude-fable-1", "none", { max_tokens: 16000 }],
     ["claude-mythos-1", "none", { max_tokens: 16000 }],
     ["claude-fable-1", "high", { max_tokens: 16000, output_config: { effort: "high" } }],
-    // Sonnet 5.5 takes between_tools for "none"
-    ["claude-sonnet-5-5", "none", { max_tokens: 16000, thinking: { type: "between_tools" } }],
-    ["claude-sonnet-5.5", "none", { max_tokens: 16000, thinking: { type: "between_tools" } }],
+    // Sonnet 5.5 always thinks, so "none" sends nothing
+    ["claude-sonnet-5-5", "none", { max_tokens: 16000 }],
+    ["claude-sonnet-5.5", "none", { max_tokens: 16000 }],
     ["claude-sonnet-5-5", "low", { max_tokens: 16000, output_config: { effort: "low" } }],
     // No reasoning given: the model's own default, no thinking fields
     ["claude-haiku-5-5", undefined, { max_tokens: 16000 }],

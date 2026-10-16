@@ -2,6 +2,7 @@ import type { TranscriptTurn } from "../../store/sessionStore";
 import { assertOk, ProviderHttpError } from "./errors";
 import { classifyQuestionIntent } from "./questionDetector";
 import { GENERAL_MODE_ID } from "./modes";
+import { EVALUATOR_MODEL } from "./models";
 
 export interface LiveOptions {
   /** The question the interviewer just asked, restated on its own; null if the last turn asked nothing */
@@ -20,7 +21,7 @@ export interface LiveOptionsRequest {
 }
 
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_MODEL = "qwen/qwen3.8-27b";
+const DEFAULT_MODEL = EVALUATOR_MODEL.id;
 const TIMEOUT_MS = 8000;
 const MAX_TURNS = 12;
 
@@ -132,7 +133,7 @@ export async function fetchLiveOptions(
 /** A one-line reason for the options card when fetching options fails. */
 export function liveOptionsErrorMessage(err: unknown): string {
   if (err instanceof ProviderHttpError) {
-    if (err.status === 401 || err.status === 403) return "Groq rejected the API key. Check it in Settings → Keys.";
+    if (err.status === 401 || err.status === 403) return "Groq rejected the API key. Check it in Settings → General.";
     if (err.status === 429) return "Groq is rate-limiting live options. They'll resume shortly.";
   }
   return "Live options are unavailable right now.";

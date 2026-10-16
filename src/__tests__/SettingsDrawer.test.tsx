@@ -33,21 +33,19 @@ describe("SettingsDrawer", () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it("renders an inline dialog with seven tabs, API keys selected by default", () => {
+    it("renders an inline dialog with seven tabs, General selected by default", () => {
       render(<SettingsDrawer isOpen={true} />);
 
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
       const tabs = screen.getAllByRole("tab");
       expect(tabs.map((t) => t.textContent)).toEqual([
-        "API keys",
+        "General",
         "Profile",
         "Modes",
         "Audio",
-        "Appearance",
         "Keybinds",
-        "Danger",
       ]);
-      expect(screen.getByRole("tab", { name: "API keys" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
     });
 
     it("switches tabs and marks the selected one", () => {
@@ -55,17 +53,14 @@ describe("SettingsDrawer", () => {
 
       openTab("Profile");
       expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
-      expect(screen.getByRole("tab", { name: "API keys" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("false");
       expect(screen.getByText("Changes save automatically.")).toBeDefined();
 
       openTab("Audio");
       expect(screen.getByRole("radiogroup", { name: "Speech-to-text engine" })).toBeDefined();
 
-      openTab("Appearance");
+      openTab("General");
       expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeDefined();
-
-      openTab("Danger");
-      expect(screen.getByText("These can't be undone.")).toBeDefined();
     });
 
     it("moves focus to the selected tab when it opens", () => {
@@ -75,14 +70,14 @@ describe("SettingsDrawer", () => {
 
     it("moves between tabs with the arrow keys", () => {
       render(<SettingsDrawer isOpen={true} />);
-      const keysTab = screen.getByRole("tab", { name: "API keys" });
+      const keysTab = screen.getByRole("tab", { name: "General" });
 
       fireEvent.keyDown(keysTab, { key: "ArrowRight" });
       expect(screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")).toBe("true");
 
       fireEvent.keyDown(screen.getByRole("tab", { name: "Profile" }), { key: "ArrowLeft" });
-      fireEvent.keyDown(screen.getByRole("tab", { name: "API keys" }), { key: "ArrowLeft" });
-      expect(screen.getByRole("tab", { name: "Danger" }).getAttribute("aria-selected")).toBe("true");
+      fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "ArrowLeft" });
+      expect(screen.getByRole("tab", { name: "Keybinds" }).getAttribute("aria-selected")).toBe("true");
     });
 
     it("closes on the close button", () => {
@@ -115,8 +110,9 @@ describe("SettingsDrawer", () => {
     it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      for (const name of ["API keys", "Profile", "Modes", "Audio", "Appearance", "Keybinds", "Danger"]) {
+      for (const name of ["General", "Profile", "Modes", "Audio", "Keybinds"]) {
         openTab(name);
+        if (name === "General") fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
         expect(screen.getByRole("dialog").textContent).not.toMatch(
           /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
         );
@@ -128,8 +124,9 @@ describe("SettingsDrawer", () => {
       const palette =
         /(?:^|[\s:])(?:text|bg|ring|border|placeholder|divide|fill)-(?:zinc|sky|red|emerald|amber|orange|slate|gray|white|black)\b/;
 
-      for (const name of ["API keys", "Profile", "Modes", "Audio", "Appearance", "Keybinds", "Danger"]) {
+      for (const name of ["General", "Profile", "Modes", "Audio", "Keybinds"]) {
         openTab(name);
+        if (name === "General") fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
         const offenders = Array.from(screen.getByRole("dialog").querySelectorAll("[class]"))
           .map((el) => el.getAttribute("class") ?? "")
           .filter((cls) => palette.test(cls));
@@ -138,111 +135,140 @@ describe("SettingsDrawer", () => {
     });
   });
 
-  describe("API keys tab", () => {
-    it("saves keys to the backend and shows Saved", async () => {
+  describe("General tab", () => {
+    const solutionModel = () => document.getElementById("solution-model") as HTMLSelectElement;
+
+    beforeEach(() => {
+      // Reset settings keeps API keys, so clear them here
+      useSettingsStore.setState({ apiKeys: { openrouter: "", anthropic: "", openai: "", groq: "" } });
+    });
+
+    it("offers the three solution providers alphabetically, with Groq only as the evaluator key", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      const providers = within(screen.getByRole("radiogroup", { name: "Solution models" }))
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent);
+      expect(providers).toEqual(["Anthropic", "OpenAI", "OpenRouter"]);
+      expect(screen.getByLabelText("Groq API key").getAttribute("aria-required")).toBe("true");
+      expect((document.getElementById("evaluator-model") as HTMLSelectElement).options.length).toBe(1);
+      expect(screen.queryByLabelText("Google Gemini API key")).toBeNull();
+    });
+
+    it("shows only the chosen provider's card, and its models when OpenAI is chosen", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      expect(screen.queryByRole("heading", { name: "OpenAI" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("radio", { name: "OpenAI" }));
+      expect(useSettingsStore.getState().selectedProvider).toBe("openai");
+      expect(screen.getByRole("heading", { name: "OpenAI" })).toBeDefined();
+      expect(screen.queryByRole("heading", { name: "OpenRouter" })).toBeNull();
+      expect(Array.from(solutionModel().options).map((o) => o.textContent)).toEqual([
+        "GPT-6 Luna",
+        "GPT-6.1 Sol · always thinks",
+      ]);
+    });
+
+    it("saves an edited key on blur, for that provider only", async () => {
       const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      fireEvent.change(screen.getByLabelText("OpenAI API key"), {
-        target: { value: "sk-proj-valid-openai-key" },
-      });
-
+      // A blur with no edit saves nothing, so an untouched field can't wipe a stored key
+      const groq = screen.getByLabelText("Groq API key");
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
+        fireEvent.blur(groq);
       });
-
-      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", {
-        provider: "openai",
-        key: "sk-proj-valid-openai-key",
-      });
-      // Cleared keys are propagated too, so deleted keys are wiped in the backend
-      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "anthropic", key: "" });
-      expect(screen.getByText("Saved")).toBeDefined();
-    });
-
-    it("shows a failure instead of Saved when the backend rejects the save", async () => {
-      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("disk full"));
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
-      });
-
-      expect(screen.getByText("Couldn't save keys. Try again.")).toBeDefined();
-      expect(screen.queryByText("Saved")).toBeNull();
-    });
-
-    it("checks the key format only and never calls the backend", () => {
-      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
-        target: { value: "sk-ant-api03-test" },
-      });
-      fireEvent.click(within(providerRow("Anthropic")).getByRole("button", { name: "Check format" }));
-      expect(within(providerRow("Anthropic")).getByText("Format looks right")).toBeDefined();
-
-      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
-        target: { value: "bad-prefix-key" },
-      });
-      fireEvent.click(within(providerRow("Anthropic")).getByRole("button", { name: "Check format" }));
-      expect(
-        within(providerRow("Anthropic")).getByText("Invalid key format: Must start with sk-ant-")
-      ).toBeDefined();
-
       expect(spyInvoke).not.toHaveBeenCalled();
+
+      const openrouter = screen.getByLabelText("OpenRouter API key");
+      fireEvent.change(openrouter, { target: { value: "sk-or-v1-test-key" } });
+      expect(spyInvoke).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.blur(openrouter);
+      });
+      expect(spyInvoke).toHaveBeenCalledTimes(1);
+      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "openrouter", key: "sk-or-v1-test-key" });
     });
 
-    it("offers the four answer providers and keys for them only", () => {
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+    it("saves a key still being edited when Settings closes", () => {
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
+      const { rerender } = render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.change(screen.getByLabelText("Groq API key"), { target: { value: "gsk_test_key" } });
 
-      const options = within(screen.getByLabelText("Primary provider"))
-        .getAllByRole("option")
-        .map((option) => option.textContent);
-      expect(options).toEqual(["OpenRouter", "Anthropic", "OpenAI", "Groq"]);
-      expect(screen.queryByLabelText("Google Gemini API key")).toBeNull();
-      expect(screen.queryByLabelText("Deepgram API key")).toBeNull();
+      rerender(<SettingsDrawer isOpen={false} />);
+      expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "groq", key: "gsk_test_key" });
     });
 
-    it("reports an empty key as required", () => {
+    it("shows a failure under the key when its save is rejected, and clears it on the next edit", async () => {
+      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("disk full"));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-      fireEvent.click(within(providerRow("Groq")).getByRole("button", { name: "Check format" }));
-      expect(within(providerRow("Groq")).getByText("API key is required")).toBeDefined();
+      const input = screen.getByLabelText("OpenRouter API key");
+      fireEvent.change(input, { target: { value: "sk-or-v1-test-key" } });
+
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(await screen.findByText("Couldn't save the OpenRouter key. Try again.")).toBeDefined();
+
+      fireEvent.change(input, { target: { value: "sk-or-v1-test-key-2" } });
+      expect(screen.queryByText("Couldn't save the OpenRouter key. Try again.")).toBeNull();
+    });
+
+    it("retries a key whose save failed when Settings closes", async () => {
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockRejectedValueOnce(new Error("disk full"));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { rerender } = render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      const input = screen.getByLabelText("Groq API key");
+      fireEvent.change(input, { target: { value: "gsk_test_key" } });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+
+      spyInvoke.mockResolvedValue(undefined);
+      rerender(<SettingsDrawer isOpen={false} />);
+      expect(spyInvoke).toHaveBeenCalledTimes(2);
+      expect(spyInvoke).toHaveBeenLastCalledWith("store_api_key", { provider: "groq", key: "gsk_test_key" });
+    });
+
+    it("says a key is needed when the chosen provider has none, and hides that once one is typed", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      expect(screen.getByText("Add a key to get answers")).toBeDefined();
+
+      fireEvent.change(screen.getByLabelText("OpenRouter API key"), { target: { value: "sk-or-v1-test-key" } });
+      expect(screen.queryByText("Add a key to get answers")).toBeNull();
     });
 
     it("toggles a key between hidden and visible", () => {
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      const input = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
+      const input = screen.getByLabelText("OpenRouter API key") as HTMLInputElement;
       expect(input.type).toBe("password");
 
-      fireEvent.click(within(providerRow("OpenAI")).getByRole("button", { name: "Show key" }));
+      fireEvent.click(within(providerRow("OpenRouter")).getByRole("button", { name: "Show OpenRouter key" }));
       expect(input.type).toBe("text");
 
-      fireEvent.click(within(providerRow("OpenAI")).getByRole("button", { name: "Hide key" }));
+      fireEvent.click(within(providerRow("OpenRouter")).getByRole("button", { name: "Hide OpenRouter key" }));
       expect(input.type).toBe("password");
     });
 
-    it("stores typed keys in the store and selects provider and models", () => {
+    it("stores typed keys, and the chosen provider and model", () => {
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      fireEvent.change(screen.getByLabelText("Anthropic API key"), {
-        target: { value: "sk-ant-api03-test-token-12345" },
+      fireEvent.change(screen.getByLabelText("OpenRouter API key"), {
+        target: { value: "sk-or-v1-test-token-12345" },
       });
-      expect(useSettingsStore.getState().apiKeys.anthropic).toBe("sk-ant-api03-test-token-12345");
+      expect(useSettingsStore.getState().apiKeys.openrouter).toBe("sk-or-v1-test-token-12345");
 
-      fireEvent.change(screen.getByLabelText("Primary provider"), { target: { value: "anthropic" } });
+      fireEvent.click(screen.getByRole("radio", { name: "Anthropic" }));
       expect(useSettingsStore.getState().selectedProvider).toBe("anthropic");
 
-      fireEvent.change(screen.getByLabelText("Solution model"), {
-        target: { value: "anthropic/claude-x" },
-      });
-      expect(useSettingsStore.getState().selectedModel).toBe("anthropic/claude-x");
+      fireEvent.change(solutionModel(), { target: { value: "claude-sonnet-5-5" } });
+      expect(useSettingsStore.getState().selectedModels.anthropic).toBe("claude-sonnet-5-5");
 
-      fireEvent.change(screen.getByLabelText("Evaluator model (fast)"), {
-        target: { value: "groq/some-model" },
-      });
-      expect(useSettingsStore.getState().evaluatorModel).toBe("groq/some-model");
+      fireEvent.change(screen.getByLabelText("Groq API key"), { target: { value: "gsk_test_key" } });
+      expect(useSettingsStore.getState().apiKeys.groq).toBe("gsk_test_key");
     });
   });
 
@@ -304,64 +330,33 @@ describe("SettingsDrawer", () => {
       expect(useSettingsStore.getState().answerThinkingLevel).toBe("high");
     });
 
-    it("shows the switches off and greys them out for a provider without thinking settings, and explains why", () => {
-      // Stored as on, but the model takes no setting, so the switch must not look on
-      useSettingsStore.setState({ selectedProvider: "groq", selectedModel: "openai/gpt-oss-120b" });
-      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
-
-      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("false");
-      expect(pickSwitch().getAttribute("aria-checked")).toBe("false");
-      for (const control of [thinkingSwitch(), pickSwitch()]) {
-        expect(control.getAttribute("aria-disabled")).toBe("true");
-        // Not a native disabled button: it stays focusable, so the note can be reached
-        expect((control as HTMLButtonElement).disabled).toBe(false);
-      }
-      expect(document.getElementById("answer-thinking-note")?.textContent).toBe(
-        "Thinking settings apply to Claude and OpenAI models."
-      );
-      expect(thinkingSwitch().getAttribute("aria-describedby")).toBe("answer-thinking-help answer-thinking-note");
-      expect(pickSwitch().getAttribute("aria-describedby")).toBe("pick-thinking-help answer-thinking-note");
-      expect(within(levelGroup()).getByRole("radio", { name: "High" }).getAttribute("aria-disabled")).toBe("true");
-
-      thinkingSwitch().focus();
-      expect(document.activeElement).toBe(thinkingSwitch());
-      // A click, a level click or an arrow key changes nothing
-      fireEvent.click(thinkingSwitch());
-      fireEvent.click(within(levelGroup()).getByRole("radio", { name: "High" }));
-      fireEvent.keyDown(within(levelGroup()).getByRole("radio", { name: "Medium" }), { key: "ArrowRight" });
-      expect(useSettingsStore.getState()).toMatchObject({
-        answerThinking: true,
-        answerThinkingLevel: "medium",
-        pickThinking: false,
-      });
-    });
-
     it("enables the switches for an OpenAI model that can turn thinking off, with no note", () => {
-      useSettingsStore.setState({ selectedProvider: "openai", selectedModel: "gpt-5.6-luna" });
+      useSettingsStore.setState({ selectedProvider: "openai" });
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       expect((thinkingSwitch() as HTMLButtonElement).disabled).toBe(false);
       expect(thinkingSwitch().getAttribute("aria-disabled")).toBe("false");
       expect(thinkingSwitch().getAttribute("aria-checked")).toBe("true");
       expect(thinkingSwitch().getAttribute("aria-describedby")).toBe("answer-thinking-help");
-      expect(screen.queryByText("Thinking settings apply to Claude and OpenAI models.")).toBeNull();
-      expect(screen.queryByText("This model always thinks; off uses its default level.")).toBeNull();
+      expect(screen.queryByText("This model doesn't support disabling thinking.")).toBeNull();
     });
 
-    it("keeps the switches on and notes that a model which always thinks uses its default for off", () => {
-      useSettingsStore.setState({ selectedProvider: "anthropic", selectedModel: "claude-opus-5-5" });
+    it("keeps thinking on and locked for a model that always thinks, and a click changes nothing", () => {
+      useSettingsStore.getState().setProviderModel("openrouter", "anthropic/claude-opus-5.5");
+      useSettingsStore.setState({ answerThinking: false, pickThinking: false });
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
-      expect((thinkingSwitch() as HTMLButtonElement).disabled).toBe(false);
       expect(thinkingSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(thinkingSwitch().getAttribute("aria-disabled")).toBe("true");
       expect(document.getElementById("answer-thinking-note")?.textContent).toBe(
-        "This model always thinks; off uses its default level."
+        "This model doesn't support disabling thinking."
       );
-      // The picks help says the same, in place of "Off is fastest"
-      expect(document.getElementById("pick-thinking-help")?.textContent).toBe(
-        "Option picks and the background answer for the asked question. This model always thinks; off uses its default level."
-      );
-      expect(screen.queryByText("Thinking settings apply to Claude and OpenAI models.")).toBeNull();
+      expect(pickSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(pickSwitch().getAttribute("aria-describedby")).toBe("pick-thinking-help answer-thinking-note");
+
+      fireEvent.click(thinkingSwitch());
+      fireEvent.click(pickSwitch());
+      expect(useSettingsStore.getState()).toMatchObject({ answerThinking: false, pickThinking: false });
     });
   });
 
@@ -511,7 +506,7 @@ describe("SettingsDrawer", () => {
       useSettingsStore.setState({ sttMode: "groq", apiKeys: { ...useSettingsStore.getState().apiKeys, groq: "" } });
       render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
 
-      expect(screen.getByText("Add a Groq key on the API keys tab to use this engine.")).toBeDefined();
+      expect(screen.getByText("Add a Groq key on the General tab to use this engine.")).toBeDefined();
     });
 
     it("shows a failure message when the model download fails", async () => {
@@ -528,10 +523,10 @@ describe("SettingsDrawer", () => {
     });
   });
 
-  describe("Appearance tab", () => {
+  describe("Appearance (General tab)", () => {
     it("shows the saved theme as selected", () => {
       useSettingsStore.setState({ theme: "dark" });
-      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       const group = screen.getByRole("radiogroup", { name: "Theme" });
       expect(within(group).getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
@@ -541,7 +536,7 @@ describe("SettingsDrawer", () => {
 
     it("sets the theme when an option is chosen", () => {
       useSettingsStore.setState({ theme: "system" });
-      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       const group = screen.getByRole("radiogroup", { name: "Theme" });
       fireEvent.click(within(group).getByRole("radio", { name: "Light" }));
@@ -553,7 +548,7 @@ describe("SettingsDrawer", () => {
 
     it("moves the theme selection with the arrow keys and wraps around", () => {
       useSettingsStore.setState({ theme: "system" });
-      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       const group = screen.getByRole("radiogroup", { name: "Theme" });
       fireEvent.keyDown(within(group).getByRole("radio", { name: "System" }), { key: "ArrowRight" });
@@ -572,7 +567,19 @@ describe("SettingsDrawer", () => {
     });
   });
 
-  describe("Danger tab", () => {
+  describe("Advanced (General tab)", () => {
+    it("starts folded and shows Burn and Reset when opened", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      const toggle = screen.getByRole("button", { name: "Advanced" });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("button", { name: "Burn" })).toBeNull();
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("These can't be undone.")).toBeDefined();
+      expect(screen.getByRole("button", { name: "Reset" })).toBeDefined();
+    });
+
     it("burns the session only on the second click and clears it after the confirm times out", async () => {
       const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       useSessionStore.getState().addTranscriptTurn({
@@ -580,7 +587,8 @@ describe("SettingsDrawer", () => {
         text: "Tell me about Paxos vs Raft.",
         timestamp: Date.now(),
       });
-      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Burn" }));
       expect(screen.getByRole("button", { name: "Click again to burn" })).toBeDefined();
@@ -598,7 +606,8 @@ describe("SettingsDrawer", () => {
 
     it("shows a failure instead of Session cleared when the backend burn fails", async () => {
       vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("locked"));
-      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Burn" }));
       await act(async () => {
@@ -611,7 +620,8 @@ describe("SettingsDrawer", () => {
 
     it("drops the burn confirm after 3 seconds", () => {
       vi.useFakeTimers();
-      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Burn" }));
       expect(screen.getByRole("button", { name: "Click again to burn" })).toBeDefined();
@@ -625,23 +635,25 @@ describe("SettingsDrawer", () => {
     it("resets settings only on the second click", async () => {
       vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
       useSettingsStore.getState().setSeniority("principal");
-      useSettingsStore.getState().setSelectedModel("custom-model");
-      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+      useSettingsStore.getState().setProviderModel("openrouter", "anthropic/claude-opus-5.5");
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-      expect(useSettingsStore.getState().selectedModel).toBe("custom-model");
+      expect(useSettingsStore.getState().selectedModels.openrouter).toBe("anthropic/claude-opus-5.5");
 
       fireEvent.click(screen.getByRole("button", { name: "Click again to reset" }));
 
       const state = useSettingsStore.getState();
       expect(state.profile.seniorityPreset).toBe("senior");
-      expect(state.selectedModel).toBe("anthropic/claude-haiku-5.5");
+      expect(state.selectedModels.openrouter).toBe("anthropic/claude-haiku-5.5");
       expect(screen.getByText("Settings reset")).toBeDefined();
     });
 
     it("drops the reset confirm after 3 seconds", () => {
       vi.useFakeTimers();
-      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
       fireEvent.click(screen.getByRole("button", { name: "Reset" }));
       act(() => {
@@ -765,11 +777,11 @@ describe("SettingsDrawer microphone and language", () => {
     expect(ipc.stopMicTest).toHaveBeenCalledTimes(2);
   });
 
-  it("gives every tab an icon above its label, in an even seven-column strip", () => {
+  it("gives every tab an icon above its label, in an even five-column strip", () => {
     render(<SettingsDrawer isOpen={true} />);
 
     const strip = screen.getByRole("tablist");
-    expect(strip.className).toContain("grid-cols-7");
+    expect(strip.className).toContain("grid-cols-5");
     for (const tab of screen.getAllByRole("tab")) {
       expect(tab.querySelector("svg")).not.toBeNull();
       expect(tab.querySelector("span")?.textContent).toBe(tab.textContent);

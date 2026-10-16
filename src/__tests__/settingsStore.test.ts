@@ -14,8 +14,11 @@ describe("useSettingsStore", () => {
   it("should have expected default settings", () => {
     const state = useSettingsStore.getState();
     expect(state.selectedProvider).toBe("openrouter");
-    expect(state.selectedModel).toBe("anthropic/claude-haiku-5.5");
-    expect(state.evaluatorModel).toBe("qwen/qwen3.8-27b");
+    expect(state.selectedModels).toEqual({
+      openrouter: "anthropic/claude-haiku-5.5",
+      anthropic: "claude-haiku-5-5",
+      openai: "gpt-6-luna",
+    });
     expect(state.sttMode).toBe("whisper_local");
     expect(state.profile.seniorityPreset).toBe("senior");
     expect(state.profile.tonePreset).toBe("balanced");
@@ -47,26 +50,23 @@ describe("useSettingsStore", () => {
     expect(apiKeys.openai).toBe("");
   });
 
-  it("should update model and provider", () => {
-    useSettingsStore.getState().setSelectedProvider("anthropic");
-    expect(useSettingsStore.getState().selectedProvider).toBe("anthropic");
+  it("keeps each provider's own model when the provider changes", () => {
+    const { setSelectedProvider, setProviderModel } = useSettingsStore.getState();
+    setSelectedProvider("openai");
+    setProviderModel("openai", "gpt-6.1-sol");
+    setSelectedProvider("openrouter");
 
-    useSettingsStore.getState().setSelectedModel("claude-opus-custom");
-    expect(useSettingsStore.getState().selectedModel).toBe("claude-opus-custom");
-  });
-
-  it("switching provider resets the model to that provider's default", () => {
-    useSettingsStore.getState().setSelectedModel("anthropic/claude-haiku-5.5");
-    useSettingsStore.getState().setSelectedProvider("openai");
-
-    expect(useSettingsStore.getState().selectedModel).toBe("gpt-5.6-luna");
+    expect(useSettingsStore.getState().selectedProvider).toBe("openrouter");
+    expect(useSettingsStore.getState().selectedModels).toMatchObject({
+      openai: "gpt-6.1-sol",
+      openrouter: "anthropic/claude-haiku-5.5",
+    });
   });
 
   it("throws when a key cannot be saved to the backend", async () => {
     vi.spyOn(ipc, "invokeInTauri").mockRejectedValueOnce(new Error("disk full"));
-    useSettingsStore.getState().setApiKey("openai", "sk-test");
 
-    await expect(useSettingsStore.getState().saveAllApiKeysToBackend()).rejects.toThrow("disk full");
+    await expect(useSettingsStore.getState().saveApiKeyToBackend("openai", "sk-test")).rejects.toThrow("disk full");
   });
 
   it("should update personalization profile and presets", () => {
@@ -104,7 +104,7 @@ describe("useSettingsStore", () => {
     useSettingsStore.getState().resetSettings();
 
     const state = useSettingsStore.getState();
-    // Keys survive a reset so a later "Save keys" can't wipe them from the config file
+    // Keys survive a reset, so the General tab never saves blanked fields over them
     expect(state.apiKeys.groq).toBe("test_groq_key");
     expect(state.profile.seniorityPreset).toBe("senior");
     expect(state).toMatchObject({ answerThinking: true, answerThinkingLevel: "medium", pickThinking: false });
@@ -112,14 +112,14 @@ describe("useSettingsStore", () => {
 
   it("should exclude apiKeys from localStorage per SEC-001 partialize rule", () => {
     useSettingsStore.getState().setApiKey("openai", "sk-secret-test-key-should-not-persist");
-    useSettingsStore.getState().setSelectedModel("gpt-4o");
+    useSettingsStore.getState().setProviderModel("openai", "gpt-6.1-sol");
 
     const raw = localStorage.getItem("sidekick-settings");
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw!);
     // State in localStorage must not have apiKeys
     expect(parsed.state.apiKeys).toBeUndefined();
-    expect(parsed.state.selectedModel).toBe("gpt-4o");
+    expect(parsed.state.selectedModels.openai).toBe("gpt-6.1-sol");
     // In-memory state still retains the key
     expect(useSettingsStore.getState().apiKeys.openai).toBe("sk-secret-test-key-should-not-persist");
   });
@@ -129,10 +129,7 @@ describe("persisted settings migration (version 2 -> 3)", () => {
   const migrate = useSettingsStore.persist.getOptions().migrate!;
 
   it("fills the thinking settings with their defaults and keeps everything else", () => {
-    const migrated = migrate(
-      { selectedModel: "anthropic/claude-haiku-5.5", sttMode: "groq", outputLanguage: "German" },
-      2
-    ) as SettingsState;
+    const migrated = migrate({ sttMode: "groq", outputLanguage: "German" }, 2) as SettingsState;
 
     expect(migrated).toMatchObject({
       answerThinking: true,
@@ -153,78 +150,57 @@ describe("persisted settings migration (version 2 -> 3)", () => {
   });
 });
 
-describe("persisted settings migration (version 0 -> 1)", () => {
+describe("settings migration to version 4 (Deepgram removed)", () => {
   const migrate = useSettingsStore.persist.getOptions().migrate!;
-
-  it("replaces only the stale model ids", () => {
-    const migrated = migrate(
-      {
-        selectedProvider: "openrouter",
-        selectedModel: "anthropic/claude-3.5-sonnet",
-        evaluatorModel: "groq/llama-3.3-70b-versatile",
-        sttMode: "groq",
-      },
-      0
-    ) as SettingsState;
-
-    expect(migrated.selectedModel).toBe("anthropic/claude-haiku-5.5");
-    expect(migrated.evaluatorModel).toBe("qwen/qwen3.8-27b");
-    expect(migrated.sttMode).toBe("groq");
-    expect(migrated.selectedProvider).toBe("openrouter");
-  });
-
-  it("uses the persisted provider's default for a stale model", () => {
-    const migrated = migrate({ selectedProvider: "openai", selectedModel: "gpt-4o" }, 0) as SettingsState;
-
-    expect(migrated.selectedModel).toBe("gpt-5.6-luna");
-  });
-
-  it("leaves a model the user chose themselves alone", () => {
-    const migrated = migrate(
-      { selectedProvider: "openrouter", selectedModel: "anthropic/claude-haiku-5.5", evaluatorModel: "my/evaluator" },
-      0
-    ) as SettingsState;
-
-    expect(migrated.selectedModel).toBe("anthropic/claude-haiku-5.5");
-    expect(migrated.evaluatorModel).toBe("my/evaluator");
-  });
-});
-
-describe("settings migration to version 4 (Deepgram and Gemini removed)", () => {
-  const migrate = useSettingsStore.persist.getOptions().migrate!;
-
-  it("is persisted at version 4", () => {
-    expect(useSettingsStore.persist.getOptions().version).toBe(4);
-  });
 
   it("moves Deepgram speech-to-text to Groq", () => {
     const migrated = migrate({ sttMode: "deepgram" }, 3) as SettingsState;
 
     expect(migrated.sttMode).toBe("groq");
   });
+});
 
-  it("moves a Gemini answer provider to OpenRouter with its default model", () => {
-    const migrated = migrate({ selectedProvider: "gemini", selectedModel: "gemini-3.8-flash" }, 3) as SettingsState;
+describe("settings migration to version 5 (one model per provider)", () => {
+  const migrate = useSettingsStore.persist.getOptions().migrate!;
 
-    expect(migrated).toMatchObject({ selectedProvider: "openrouter", selectedModel: "anthropic/claude-haiku-5.5" });
+  it("is persisted at version 5", () => {
+    expect(useSettingsStore.persist.getOptions().version).toBe(5);
   });
 
-  it("keeps the other settings, and Google models served through OpenRouter", () => {
-    const kept = {
-      selectedProvider: "openrouter",
-      selectedModel: "google/gemini-3.8-flash",
-      sttMode: "whisper_local",
-      answerThinkingLevel: "high",
-    };
-    const migrated = migrate({ ...kept }, 3) as SettingsState;
+  it("moves a Groq answer provider to OpenRouter with its default model", () => {
+    const migrated = migrate({ selectedProvider: "groq", selectedModel: "openai/gpt-oss-120b" }, 4) as SettingsState;
 
-    expect(migrated).toMatchObject(kept);
+    expect(migrated.selectedProvider).toBe("openrouter");
+    expect(migrated.selectedModels.openrouter).toBe("anthropic/claude-haiku-5.5");
   });
 
-  it("leaves a version 4 state alone", () => {
-    const state = { sttMode: "groq", selectedProvider: "anthropic", selectedModel: "claude-haiku-5-5" };
+  it("keeps a listed model and replaces an unlisted one with its provider's default", () => {
+    const anthropic = migrate({ selectedProvider: "anthropic", selectedModel: "claude-opus-5-5" }, 4) as SettingsState;
+    expect(anthropic.selectedModels.anthropic).toBe("claude-opus-5-5");
 
-    expect(migrate({ ...state }, 4)).toEqual(state);
+    const openai = migrate({ selectedProvider: "openai", selectedModel: "gpt-5.6-luna" }, 4) as SettingsState;
+    expect(openai.selectedModels.openai).toBe("gpt-6-luna");
+  });
+
+  it("drops the old single-model keys and keeps the other providers on their defaults", () => {
+    const migrated = migrate(
+      { selectedProvider: "openrouter", selectedModel: "anthropic/claude-sonnet-5.5", evaluatorModel: "groq/x" },
+      4
+    ) as SettingsState;
+
+    expect("selectedModel" in migrated).toBe(false);
+    expect("evaluatorModel" in migrated).toBe(false);
+    expect(migrated.selectedModels).toEqual({
+      openrouter: "anthropic/claude-sonnet-5.5",
+      anthropic: "claude-haiku-5-5",
+      openai: "gpt-6-luna",
+    });
+  });
+
+  it("leaves a version 5 state alone", () => {
+    const state = { sttMode: "groq", selectedProvider: "anthropic", selectedModels: { anthropic: "claude-opus-5-5" } };
+
+    expect(migrate({ ...state }, 5)).toEqual(state);
   });
 });
 
@@ -289,5 +265,21 @@ describe("settings storage inside Tauri (config file)", () => {
     await expect(storage.setItem(KEY, { state: {}, version: 0 })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe("loading a hand-edited config", () => {
+  const merge = useSettingsStore.persist.getOptions().merge!;
+
+  it("falls back from an unknown provider and fills missing models", () => {
+    const current = useSettingsStore.getState();
+    const merged = merge({ selectedProvider: "groq", selectedModels: null }, current) as SettingsState;
+    expect(merged.selectedProvider).toBe(current.selectedProvider);
+    expect(merged.selectedModels).toEqual(current.selectedModels);
+
+    const kept = merge({ selectedProvider: "openai", selectedModels: { openai: "gpt-6.1-sol" } }, current) as SettingsState;
+    expect(kept.selectedProvider).toBe("openai");
+    expect(kept.selectedModels.openai).toBe("gpt-6.1-sol");
+    expect(kept.selectedModels.anthropic).toBe(current.selectedModels.anthropic);
   });
 });

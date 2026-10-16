@@ -24,7 +24,6 @@ import {
   parseProgressiveStream,
   readSSEStream,
 } from "../services/ai/streamParser";
-import { dispatchDeepSolve, getDefaultModelForProvider } from "../services/ai/dispatcher";
 import { useDeepSolver } from "../hooks/useDeepSolver";
 import { useSessionStore, activeThreadOf, requestSolve, STOPPED_MESSAGE, ThreadMessage } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
@@ -127,7 +126,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
     useAppStore.setState({ isPanicked: false, isVisible: true });
     useSettingsStore.setState({
       selectedProvider: "openrouter",
-      selectedModel: "anthropic/claude-haiku-5.5",
+      selectedModels: { openrouter: "anthropic/claude-haiku-5.5", anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
       apiKeys: {
         openrouter: "",
         anthropic: "",
@@ -504,43 +503,6 @@ Space Complexity: O(C) capacity
 
       expect(chunks).toEqual(["OpenAI chunk"]);
       expect(result).toBe("OpenAI chunk");
-    });
-
-  });
-
-  describe("5. Unified Dispatcher (dispatcher.ts)", () => {
-    it("returns the current default model for each provider", () => {
-      expect(getDefaultModelForProvider("openrouter")).toBe("anthropic/claude-haiku-5.5");
-      expect(getDefaultModelForProvider("anthropic")).toBe("claude-haiku-5-5");
-      expect(getDefaultModelForProvider("openai")).toBe("gpt-5.6-luna");
-      expect(getDefaultModelForProvider("groq")).toBe("openai/gpt-oss-120b");
-    });
-
-    it("routes groq provider requests to Groq completions endpoint", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response(
-          'data: {"choices":[{"delta":{"content":"<stage_1_intuition><verbal_summary>Groq fast inference</verbal_summary></stage_1_intuition>"}}]}\n\ndata: [DONE]\n\n',
-          { status: 200, headers: { "Content-Type": "text/event-stream" } }
-        )
-      );
-
-      const solution = await dispatchDeepSolve({
-        provider: "groq",
-        apiKey: "gsk_test123",
-        prompt: "Explain event loops",
-        reasoning: "none",
-      });
-
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://api.groq.com/openai/v1/chat/completions",
-        expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({
-            Authorization: "Bearer gsk_test123",
-          }),
-        })
-      );
-      expect(solution.stage1Intuition?.verbalSummary).toContain("Groq fast inference");
     });
   });
 

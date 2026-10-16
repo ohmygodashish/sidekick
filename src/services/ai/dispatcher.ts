@@ -1,15 +1,16 @@
-import type { ApiProvider, SettingsState, ThinkingLevel } from "../../store/settingsStore";
+import type { SettingsState, SolutionProvider, ThinkingLevel } from "../../store/settingsStore";
 import type { MessageKind, ProgressiveSolution } from "../../store/sessionStore";
 import { parseProgressiveStream } from "./streamParser";
+import { activeModel, modelFor } from "./models";
 import { ProviderHttpError } from "./errors";
 import { streamOpenRouter, type ReasoningMode } from "./openrouter";
 import { streamAnthropic } from "./anthropic";
 import { streamOpenAI } from "./openai";
 import { markPromptCache, promptCacheFingerprint } from "./promptCache";
-import { sentReasoning } from "./reasoning";
+import { reasoningSupport, sentReasoning } from "./reasoning";
 
 export interface DispatchOptions {
-  provider: ApiProvider;
+  provider: SolutionProvider;
   apiKey?: string;
   model?: string;
   prompt: string;
@@ -36,11 +37,17 @@ const LEVELS: readonly string[] = ["low", "medium", "high"];
  */
 export function reasoningFor(
   kind: MessageKind,
-  settings: Pick<SettingsState, "answerThinking" | "answerThinkingLevel" | "pickThinking">
+  settings: Pick<
+    SettingsState,
+    "answerThinking" | "answerThinkingLevel" | "pickThinking" | "selectedProvider" | "selectedModels"
+  >
 ): ReasoningMode {
-  if (!settings.answerThinking) return "none";
   // A level that isn't one of the three (a hand-edited config) falls back to the default
   const level: ThinkingLevel = LEVELS.includes(settings.answerThinkingLevel) ? settings.answerThinkingLevel : "medium";
+  // A model that can't turn thinking off uses the chosen level for every answer, picks included
+  const { supported, canDisable } = reasoningSupport(settings.selectedProvider, activeModel(settings));
+  if (supported && !canDisable) return level;
+  if (!settings.answerThinking) return "none";
   if (kind !== "option") return level;
   return settings.pickThinking ? level : "none";
 }
@@ -55,30 +62,11 @@ const STALL_TIMEOUT_MS = 25_000;
 const STALL_MESSAGE = "The model stopped responding. Retry, or pick a faster model in Settings.";
 const EMPTY_MESSAGE = "The model returned an empty answer. Retry, or pick another model in Settings.";
 
-const PROVIDER_NAMES: Record<ApiProvider, string> = {
+const PROVIDER_NAMES: Record<SolutionProvider, string> = {
   openrouter: "OpenRouter",
   anthropic: "Anthropic",
   openai: "OpenAI",
-  groq: "Groq",
 };
-
-/**
- * Returns canonical default model identifier for each supported provider.
- */
-export function getDefaultModelForProvider(provider: ApiProvider): string {
-  switch (provider) {
-    case "openrouter":
-      return "anthropic/claude-haiku-5.5";
-    case "anthropic":
-      return "claude-haiku-5-5";
-    case "openai":
-      return "gpt-5.6-luna";
-    case "groq":
-      return "openai/gpt-oss-120b";
-    default:
-      return "anthropic/claude-haiku-5.5";
-  }
-}
 
 function hasAnswer(solution: ProgressiveSolution): boolean {
   return Boolean(
@@ -99,14 +87,14 @@ function refusesThinking(err: unknown): boolean {
 /**
  * Maps a provider failure to a short message for the answer panel. The raw error stays on `cause`.
  */
-function toUserError(err: unknown, provider: ApiProvider, model: string, gotData: boolean): Error {
+function toUserError(err: unknown, provider: SolutionProvider, model: string, gotData: boolean): Error {
   const name = PROVIDER_NAMES[provider];
   let message = `${name} request failed. Retry in a moment.`;
 
   if (err instanceof ProviderHttpError) {
     const { status, body } = err;
     if (status === 401 || status === 403) {
-      message = `${name} rejected the API key. Check it in Settings → Keys.`;
+      message = `${name} rejected the API key. Check it in Settings → General.`;
     } else if (status === 404 || (status === 400 && /model/i.test(body) && !/context/i.test(body))) {
       message = `${name} doesn't recognise the model "${model}". Pick another in Settings.`;
     } else if (status === 429) {
@@ -149,12 +137,12 @@ export async function dispatchDeepSolve(
     onProgressiveUpdate,
   } = options;
 
-  const model = requestedModel || getDefaultModelForProvider(provider);
+  const model = requestedModel || modelFor(provider);
   const metadata = { questionId, provider, model };
 
   const trimmedKey = (apiKey || "").trim();
   if (!trimmedKey) {
-    throw new Error(`Add your ${PROVIDER_NAMES[provider]} API key in Settings → Keys.`);
+    throw new Error(`Add your ${PROVIDER_NAMES[provider]} API key in Settings → General.`);
   }
 
   // The thinking value the request sends (undefined: none). A retry without it changes the cached shape too.
@@ -220,15 +208,6 @@ export async function dispatchDeepSolve(
         break;
       case "openai":
         await streamOpenAI(req);
-        break;
-      case "groq":
-        await streamOpenAI({
-          ...req,
-          endpoint: "https://api.groq.com/openai/v1/chat/completions",
-        });
-        break;
-      default:
-        await streamOpenRouter(req);
         break;
     }
   };

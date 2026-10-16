@@ -7,7 +7,7 @@ import { isOpenAIReasoningModel, sentReasoning } from "./reasoning";
  * Builds OpenAI Chat Completions payload with vision image_url support.
  */
 export function buildOpenAIPayload(request: ProviderStreamRequest) {
-  let model = request.model || "gpt-5.6-luna";
+  let model = request.model || "gpt-6-luna";
   // Only OpenAI's own endpoint drops the prefix; Groq's ids include it (openai/gpt-oss-120b)
   if (!request.endpoint && model.startsWith("openai/")) {
     model = model.slice("openai/".length);

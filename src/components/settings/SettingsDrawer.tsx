@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
+  ChevronDown,
   Keyboard,
-  KeyRound,
   Layers,
   LoaderCircle,
   Monitor,
   Moon,
-  SunMoon,
+  SlidersHorizontal,
   Sun,
-  TriangleAlert,
   User,
   X,
   type LucideIcon,
@@ -33,10 +32,11 @@ import { ApiKeyInputs } from "./ApiKeyInputs";
 import { ProfileEditor } from "./ProfileEditor";
 import { ModesTab } from "./ModesTab";
 import { MicSection } from "./MicSection";
+import { usePresence } from "../../hooks/usePresence";
 import { cn } from "../../lib/utils";
 import { SHORTCUTS, type Shortcut } from "../../lib/shortcuts";
 
-export type SettingsTab = "keys" | "profile" | "modes" | "audio" | "appearance" | "keybinds" | "danger";
+export type SettingsTab = "keys" | "profile" | "modes" | "audio" | "keybinds";
 
 interface SettingsDrawerProps {
   isOpen?: boolean;
@@ -45,13 +45,11 @@ interface SettingsDrawerProps {
 }
 
 const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
-  { id: "keys", label: "API keys", icon: KeyRound },
+  { id: "keys", label: "General", icon: SlidersHorizontal },
   { id: "profile", label: "Profile", icon: User },
   { id: "modes", label: "Modes", icon: Layers },
   { id: "audio", label: "Audio", icon: AudioLines },
-  { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "keybinds", label: "Keybinds", icon: Keyboard },
-  { id: "danger", label: "Danger", icon: TriangleAlert },
 ];
 
 const THEMES: { id: ThemePreference; label: string; icon: LucideIcon }[] = [
@@ -113,6 +111,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [armed, setArmed] = useState<DangerAction | null>(null);
   const [done, setDone] = useState<DangerAction | null>(null);
   const [burnFailed, setBurnFailed] = useState(false);
+  // Burn and Reset sit folded away at the bottom of General
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advanced = usePresence(advancedOpen);
   const armTimer = useRef<number | undefined>(undefined);
   const doneTimer = useRef<number | undefined>(undefined);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -254,7 +255,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         role="tablist"
         aria-label="Settings sections"
         onKeyDown={onTabKeyDown}
-        className="mx-3 grid grid-cols-7 gap-1"
+        className="mx-3 grid grid-cols-5 gap-1"
       >
         {TABS.map(({ id, label, icon: Icon }) => {
           const selected = id === activeTab;
@@ -289,7 +290,115 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         aria-labelledby={`settings-tab-${activeTab}`}
         className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-3 sk-scroll"
       >
-        {activeTab === "keys" && <ApiKeyInputs />}
+        {activeTab === "keys" && (
+          <>
+            <div className="space-y-2">
+              <h3 className="sk-label">Appearance</h3>
+              <div
+                role="radiogroup"
+                aria-label="Theme"
+                onKeyDown={onThemeKeyDown}
+                className="grid grid-cols-3 gap-1 rounded-lg bg-sk-fill p-1"
+              >
+                {THEMES.map(({ id, label, icon: Icon }) => {
+                  const selected = theme === id;
+                  return (
+                    <button
+                      key={id}
+                      ref={(el) => {
+                        themeRefs.current[id] = el;
+                      }}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      tabIndex={selected ? 0 : -1}
+                      onClick={() => setTheme(id)}
+                      className={cn(
+                        "flex h-8 items-center justify-center gap-1.5 rounded text-[13px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
+                        selected ? "bg-sk-accent-tint text-sk-fg" : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover"
+                      )}
+                    >
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="sk-meta">System follows your macOS appearance.</p>
+            </div>
+            <ApiKeyInputs />
+            <div className="space-y-2">
+              <h3>
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen}
+                  aria-controls="settings-advanced"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  className="flex w-full items-center gap-1.5 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-sk-focus"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 text-sk-fg-3 transition-transform duration-150 motion-reduce:transition-none",
+                      !advancedOpen && "-rotate-90"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="sk-label">Advanced</span>
+                </button>
+              </h3>
+              {advanced.mounted && (
+                <div
+                  id="settings-advanced"
+                  data-state={advanced.state}
+                  inert={advanced.state === "closed"}
+                  className="sk-pop space-y-2"
+                >
+                  <p className="sk-meta">These can&apos;t be undone.</p>
+
+                  <div className="space-y-2 rounded-lg bg-sk-fill p-3">
+                    <h4 className="text-[13px] font-medium text-sk-fg">Burn session</h4>
+                    <p className="sk-meta">
+                      Clears transcripts, questions and answers, and stops listening.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button type="button" onClick={() => runDanger("burn")} className="sk-btn-danger">
+                        {armed === "burn" ? "Click again to burn" : "Burn"}
+                      </button>
+                      {done === "burn" && (
+                        <span role="status" className="sk-meta text-sk-success">
+                          Session cleared
+                        </span>
+                      )}
+                      {burnFailed && (
+                        <span role="status" className="sk-meta text-sk-danger">
+                          Couldn&apos;t clear the session in the backend. Try again.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 rounded-lg bg-sk-fill p-3">
+                    <h4 className="text-[13px] font-medium text-sk-fg">Reset settings</h4>
+                    <p className="sk-meta">
+                      Restores models, thinking, persona, speech, language, microphone and theme settings to their defaults, and the
+                      active mode to General. API keys and custom modes are kept.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button type="button" onClick={() => runDanger("reset")} className="sk-btn-secondary">
+                        {armed === "reset" ? "Click again to reset" : "Reset"}
+                      </button>
+                      {done === "reset" && (
+                        <span role="status" className="sk-meta text-sk-success">
+                          Settings reset
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {activeTab === "profile" && <ProfileEditor />}
 
@@ -324,7 +433,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </div>
               {sttKeyMissing && (
                 <p className="sk-meta">
-                  Add a Groq key on the API keys tab to use this engine.
+                  Add a Groq key on the General tab to use this engine.
                 </p>
               )}
             </div>
@@ -413,43 +522,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           </div>
         )}
 
-        {activeTab === "appearance" && (
-          <div className="space-y-2">
-            <h3 className="sk-label">Theme</h3>
-            <div
-              role="radiogroup"
-              aria-label="Theme"
-              onKeyDown={onThemeKeyDown}
-              className="grid grid-cols-3 gap-1 rounded-lg bg-sk-fill p-1"
-            >
-              {THEMES.map(({ id, label, icon: Icon }) => {
-                const selected = theme === id;
-                return (
-                  <button
-                    key={id}
-                    ref={(el) => {
-                      themeRefs.current[id] = el;
-                    }}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    tabIndex={selected ? 0 : -1}
-                    onClick={() => setTheme(id)}
-                    className={cn(
-                      "flex h-8 items-center justify-center gap-1.5 rounded text-[13px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
-                      selected ? "bg-sk-accent-tint text-sk-fg" : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="sk-meta">System follows your macOS appearance.</p>
-          </div>
-        )}
-
         {activeTab === "keybinds" && (
           <div className="space-y-4">
             <p className="sk-meta">
@@ -482,51 +554,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           </div>
         )}
 
-        {activeTab === "danger" && (
-          <div className="space-y-2">
-            <p className="sk-meta">These can&apos;t be undone.</p>
-
-            <div className="space-y-2 rounded-lg bg-sk-fill p-3">
-              <h3 className="text-[13px] font-medium text-sk-fg">Burn session</h3>
-              <p className="sk-meta">
-                Clears transcripts, questions and answers, and stops listening.
-              </p>
-              <div className="flex flex-wrap items-center gap-3">
-                <button type="button" onClick={() => runDanger("burn")} className="sk-btn-danger">
-                  {armed === "burn" ? "Click again to burn" : "Burn"}
-                </button>
-                {done === "burn" && (
-                  <span role="status" className="sk-meta text-sk-success">
-                    Session cleared
-                  </span>
-                )}
-                {burnFailed && (
-                  <span role="status" className="sk-meta text-sk-danger">
-                    Couldn&apos;t clear the session in the backend. Try again.
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-2 rounded-lg bg-sk-fill p-3">
-              <h3 className="text-[13px] font-medium text-sk-fg">Reset settings</h3>
-              <p className="sk-meta">
-                Restores models, thinking, persona, speech, language, microphone and theme settings to their defaults, and the
-                active mode to General. API keys and custom modes are kept.
-              </p>
-              <div className="flex flex-wrap items-center gap-3">
-                <button type="button" onClick={() => runDanger("reset")} className="sk-btn-secondary">
-                  {armed === "reset" ? "Click again to reset" : "Reset"}
-                </button>
-                {done === "reset" && (
-                  <span role="status" className="sk-meta text-sk-success">
-                    Settings reset
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </section>
   );

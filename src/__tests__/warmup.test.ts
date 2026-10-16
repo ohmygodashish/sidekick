@@ -12,7 +12,7 @@ const MIN_55 = 55 * 60_000;
 
 const base: WarmSettings = {
   selectedProvider: "anthropic",
-  selectedModel: "claude-haiku-5-5",
+  selectedModels: { openrouter: "anthropic/claude-haiku-5.5", anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
   apiKeys: { openrouter: "", anthropic: "sk-ant-test", openai: "", groq: "" },
   profile: {
     resumeText: "Built payments at Acme.",
@@ -171,7 +171,6 @@ describe("warmPromptCache", () => {
     await warmup.warmPromptCache({
       ...base,
       selectedProvider: "openrouter",
-      selectedModel: "anthropic/claude-haiku-5.5",
       apiKeys: { ...base.apiKeys, openrouter: "sk-or-test" },
       pickThinking: true,
     });
@@ -197,7 +196,6 @@ describe("warmPromptCache", () => {
     await warmup.warmPromptCache({
       ...base,
       selectedProvider: "openrouter",
-      selectedModel: "anthropic/claude-haiku-5.5",
       apiKeys: { ...base.apiKeys, openrouter: "sk-or-test" },
     });
 
@@ -214,9 +212,12 @@ describe("warmPromptCache", () => {
   });
 
   it("does nothing for other providers, other OpenRouter models, or without a key", async () => {
-    await warmup.warmPromptCache({ ...base, selectedProvider: "openai", selectedModel: "gpt-4o" });
-    await warmup.warmPromptCache({ ...base, selectedProvider: "openrouter", selectedModel: "openai/gpt-oss-120b" });
-    await warmup.warmPromptCache({ ...base, selectedProvider: "openrouter", selectedModel: "google/gemini-3.8-flash" });
+    await warmup.warmPromptCache({ ...base, selectedProvider: "openai" });
+    await warmup.warmPromptCache({
+      ...base,
+      selectedProvider: "openrouter",
+      selectedModels: { ...base.selectedModels, openrouter: "openai/gpt-6-luna" },
+    });
     await warmup.warmPromptCache(withKeys({ anthropic: "  " }));
 
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -304,26 +305,6 @@ describe("a real answer keeps the prefix warm", () => {
     await vi.advanceTimersByTimeAsync(25_000);
     expect((await failed).message).toMatch(/stopped responding/);
     await warmup.warmPromptCache(off);
-
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("marks the default-thinking shape warm after a solve retried without thinking", async () => {
-    // Opus 5.5 can't turn thinking off, so "none" is sent with no thinking fields; a 400 naming thinking retries without it
-    fetchSpy.mockResolvedValueOnce(new Response('{"error":"unsupported thinking"}', { status: 400 }));
-    fetchSpy.mockResolvedValueOnce(answer());
-    const { prefix, suffix } = prompts.currentSystemParts(base);
-
-    await dispatcher.dispatchDeepSolve({
-      provider: "anthropic",
-      apiKey: "sk-ant-test",
-      model: "claude-opus-5-5",
-      prompt: "Two sum",
-      systemPrefix: prefix,
-      systemSuffix: suffix,
-      reasoning: "high",
-    });
-    await warmup.warmPromptCache({ ...off, selectedModel: "claude-opus-5-5" });
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });

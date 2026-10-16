@@ -82,7 +82,7 @@ beforeEach(() => {
   });
   useSettingsStore.setState((s) => ({
     selectedProvider: "openrouter",
-    selectedModel: "anthropic/claude-haiku-5.5",
+    selectedModels: { openrouter: "anthropic/claude-haiku-5.5", anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" },
     activeModeId: "general",
     modes: [],
     outputLanguage: "English",
@@ -346,13 +346,21 @@ describe("slot-1 prefetch", () => {
     ["the mode", () => useSettingsStore.getState().setActiveMode("behavioral")],
     ["the output language", () => useSettingsStore.getState().setOutputLanguage("French")],
     ["the provider", () => useSettingsStore.getState().setSelectedProvider("anthropic")],
-    ["the model", () => useSettingsStore.getState().setSelectedModel("openai/gpt-5.6-luna")],
+    ["the model", () => useSettingsStore.getState().setProviderModel("openrouter", "anthropic/claude-sonnet-5.5")],
     ["the resume or seniority", () => useSettingsStore.getState().setSeniority("staff")],
   ])("a change of %s discards the prefetch", async (_name, change) => {
     mount();
     await ask("How do you detect a cycle?");
     await settle(change);
     expect(calls[0].options.signal?.aborted).toBe(true);
+  });
+
+  it("a change of a model the active provider doesn't use keeps the prefetch", async () => {
+    mount();
+    await ask("How do you detect a cycle?");
+    await settle(() => useSettingsStore.getState().setProviderModel("openai", "gpt-6.1-sol"));
+    expect(calls[0].options.signal?.aborted).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 
   it("a change of the thinking level restarts the prefetch at the new level", async () => {
