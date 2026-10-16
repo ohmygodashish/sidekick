@@ -81,6 +81,10 @@ pub fn run() {
         })
         .build();
 
+    // Drops the activation requests tao and wry make while the window and web view are built
+    #[cfg(target_os = "macos")]
+    appkit::suppress_launch_activation();
+
     let builder = tauri::Builder::default();
     // Tauri activates the app at launch by default, which takes focus before the overlay is shown
     #[cfg(target_os = "macos")]
@@ -135,6 +139,10 @@ pub fn run() {
                     appkit::show_without_activating(&main_window)?;
                 }
             }
+
+            // Last step: focus_for_typing needs activation again, and all windows now exist
+            #[cfg(target_os = "macos")]
+            appkit::restore_activation();
 
             Ok(())
         })

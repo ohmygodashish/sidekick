@@ -13,9 +13,13 @@ use cocoa::appkit::{NSApp, NSColor, NSWindow, NSWindowCollectionBehavior};
 #[cfg(target_os = "macos")]
 use cocoa::base::{id, nil, BOOL, NO, YES};
 #[cfg(target_os = "macos")]
+use objc::runtime::{class_getInstanceMethod, method_setImplementation, Imp, Sel};
+#[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
 
 /// Pid of the app the user was in when Sidekick took the keyboard for typing; 0 when unknown.
 #[cfg(target_os = "macos")]
@@ -24,6 +28,10 @@ static PREVIOUS_APP_PID: AtomicI32 = AtomicI32::new(0);
 /// True while Sidekick holds the keyboard because a text field asked for it.
 #[cfg(target_os = "macos")]
 static TYPING: AtomicBool = AtomicBool::new(false);
+
+/// Activation methods swapped out by `suppress_launch_activation`, as (method, original IMP).
+#[cfg(target_os = "macos")]
+static SWAPPED_ACTIVATION: Mutex<Vec<(usize, Imp)>> = Mutex::new(Vec::new());
 
 /// Stores the frontmost app's pid as the one to hand focus back to, unless it is Sidekick.
 #[cfg(target_os = "macos")]
@@ -245,9 +253,8 @@ pub fn release_key_focus<R: tauri::Runtime>(
     Ok(())
 }
 
-/// Called when the window becomes key. wry asks AppKit to activate the app when it creates the
-/// web view, and macOS 14+ grants that late, on the first show; hand the keyboard straight back
-/// unless a text field asked for it.
+/// Called when the window becomes key. Safety net behind `suppress_launch_activation`: if anything
+/// else activates Sidekick, hand the keyboard straight back unless a text field asked for it.
 #[cfg(target_os = "macos")]
 pub fn on_became_key<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     if !TYPING.load(Ordering::SeqCst) {
@@ -257,6 +264,59 @@ pub fn on_became_key<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn on_became_key<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>) {}
+
+/// No-op replacements for `-[NSApplication activate]` and `activateIgnoringOtherApps:`.
+#[cfg(target_os = "macos")]
+extern "C" fn skip_activation(_this: id, _cmd: Sel) {}
+
+#[cfg(target_os = "macos")]
+extern "C" fn skip_activation_ignoring_others(_this: id, _cmd: Sel, _ignore: BOOL) {}
+
+/// Stops the app activating while the web view is built: wry asks AppKit to activate there, and
+/// macOS 14+ grants it late, on the first show. Undo with `restore_activation`.
+#[cfg(target_os = "macos")]
+pub fn suppress_launch_activation() {
+    let mut swapped = SWAPPED_ACTIVATION.lock().unwrap_or_else(|e| e.into_inner());
+    if !swapped.is_empty() {
+        return;
+    }
+    unsafe {
+        let replacements: [(Sel, Imp); 2] = [
+            (sel!(activate), std::mem::transmute(skip_activation as extern "C" fn(id, Sel))),
+            (
+                sel!(activateIgnoringOtherApps:),
+                std::mem::transmute(
+                    skip_activation_ignoring_others as extern "C" fn(id, Sel, BOOL),
+                ),
+            ),
+        ];
+        for (selector, replacement) in replacements {
+            // `activate` only exists on macOS 14+, so a missing method is skipped
+            let method = class_getInstanceMethod(class!(NSApplication), selector);
+            if !method.is_null() {
+                let original = method_setImplementation(method as *mut _, replacement);
+                swapped.push((method as usize, original));
+            }
+        }
+    }
+}
+
+/// Puts back what `suppress_launch_activation` swapped out. Safe to call again, or without it.
+#[cfg(target_os = "macos")]
+pub fn restore_activation() {
+    let mut swapped = SWAPPED_ACTIVATION.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        for (method, original) in swapped.drain(..) {
+            method_setImplementation(method as *mut _, original);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn suppress_launch_activation() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn restore_activation() {}
 
 /// Sets the native macOS window opacity / alpha value.
 ///
@@ -309,6 +369,25 @@ mod tests {
         {
             let nil_window: cocoa::base::id = cocoa::base::nil;
             configure_stealth_window(nil_window);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_launch_activation_swap_is_undone() {
+        use objc::runtime::method_getImplementation;
+        unsafe {
+            let method =
+                class_getInstanceMethod(class!(NSApplication), sel!(activateIgnoringOtherApps:));
+            assert!(!method.is_null());
+            let original = method_getImplementation(method) as usize;
+
+            suppress_launch_activation();
+            assert_ne!(method_getImplementation(method) as usize, original);
+            restore_activation();
+            assert_eq!(method_getImplementation(method) as usize, original);
+            restore_activation();
+            assert_eq!(method_getImplementation(method) as usize, original);
         }
     }
 
