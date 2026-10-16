@@ -7,6 +7,7 @@ import { useLiveOptions } from "./hooks/useLiveOptions";
 import { useDeepSolver } from "./hooks/useDeepSolver";
 import { useTheme } from "./hooks/useTheme";
 import { useFocusRelease } from "./hooks/useFocusRelease";
+import { usePointerHover } from "./hooks/usePointerHover";
 import { setSttEngine } from "./lib/ipc";
 
 export default function App() {
@@ -24,6 +25,9 @@ export default function App() {
 
   // Keyboard focus returns to the previous app after clicks outside text fields
   useFocusRelease();
+
+  // Hover styles follow the pointer that Rust reports (WebKit doesn't track it over the overlay)
+  usePointerHover();
 
   useEffect(() => {
     syncFromBackend();

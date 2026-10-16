@@ -6,7 +6,7 @@
 //! - Meeting Toggle (`Cmd + Shift + Backslash`): Emits `sidekick://toggle_meeting` so the frontend starts or stops listening.
 //! - Click-Through Toggle (`Cmd + Shift + C` / `Super + Shift + C`): Enables mouse pass-through to underlying apps.
 //! - Layout Mode Toggle (`Cmd + Shift + M` / `Super + Shift + M`): Toggles compact view (control bar only) on and off.
-//! - Visible-only shortcuts (`Cmd + Comma`, `Cmd + R`, `Cmd + Arrows`, `Cmd + Shift + Up/Down`): Registered only while the window is visible, so other apps keep these keys while Sidekick is hidden. Open Settings, new chat, move the window, scroll the answer.
+//! - Visible-only shortcuts (`Cmd + Comma`, `Cmd + R`, `Cmd + Enter`, `Cmd + Arrows`, `Cmd + Shift + Up/Down`): Registered only while the window is visible, so other apps keep these keys while Sidekick is hidden. Open Settings, new chat, Assist, move the window, scroll the answer.
 //! - Opacity Configuration: Controls window alpha level.
 
 use std::str::FromStr;
@@ -37,7 +37,8 @@ pub const SHORTCUT_MOVE_LEFT: &str = "Super+ArrowLeft";
 pub const SHORTCUT_MOVE_RIGHT: &str = "Super+ArrowRight";
 pub const SHORTCUT_SCROLL_UP: &str = "Super+Shift+ArrowUp";
 pub const SHORTCUT_SCROLL_DOWN: &str = "Super+Shift+ArrowDown";
-pub const VISIBLE_ONLY_SHORTCUTS: [&str; 8] = [
+pub const SHORTCUT_ASSIST: &str = "Super+Enter";
+pub const VISIBLE_ONLY_SHORTCUTS: [&str; 9] = [
     SHORTCUT_OPEN_SETTINGS,
     SHORTCUT_NEW_CHAT,
     SHORTCUT_MOVE_UP,
@@ -46,6 +47,7 @@ pub const VISIBLE_ONLY_SHORTCUTS: [&str; 8] = [
     SHORTCUT_MOVE_RIGHT,
     SHORTCUT_SCROLL_UP,
     SHORTCUT_SCROLL_DOWN,
+    SHORTCUT_ASSIST,
 ];
 
 /// Event names emitted to frontend
@@ -60,6 +62,7 @@ pub const EVENT_TOGGLE_MEETING: &str = "sidekick://toggle_meeting";
 pub const EVENT_OPEN_SETTINGS: &str = "sidekick://open_settings";
 pub const EVENT_NEW_CHAT: &str = "sidekick://new_chat";
 pub const EVENT_SCROLL_ANSWER: &str = "sidekick://scroll_answer";
+pub const EVENT_ASSIST: &str = "sidekick://assist";
 
 /// Layout display modes supported by Sidekick
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +136,8 @@ pub enum SidekickAction {
     MoveWindow(i32, i32),
     /// Scroll the answer, up when true (visible only)
     ScrollAnswer(bool),
+    /// Assist: answer from the screen and transcript, or send the typed question (visible only)
+    Assist,
 }
 
 /// Resolves a parsed `Shortcut` into the matching `SidekickAction`
@@ -169,6 +174,8 @@ pub fn resolve_action(shortcut: &Shortcut) -> Option<SidekickAction> {
         Some(SidekickAction::ScrollAnswer(true))
     } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::ArrowDown) {
         Some(SidekickAction::ScrollAnswer(false))
+    } else if shortcut.matches(Modifiers::SUPER, Code::Enter) {
+        Some(SidekickAction::Assist)
     } else {
         None
     }
@@ -257,6 +264,9 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
             SidekickAction::ScrollAnswer(up) => {
                 let direction = if up { "up" } else { "down" };
                 let _ = app.emit(EVENT_SCROLL_ANSWER, serde_json::json!({ "direction": direction }));
+            }
+            SidekickAction::Assist => {
+                let _ = app.emit(EVENT_ASSIST, serde_json::json!({}));
             }
             SidekickAction::PickOption(index) => {
                 // The answer must be visible, so summon a hidden overlay first
@@ -729,6 +739,19 @@ mod tests {
         // Modifiers must match exactly: Shift+Left is not bound, and Cmd+Up is not Cmd+Shift+Up
         let shift_left: Shortcut = "Cmd+Shift+ArrowLeft".parse().expect("Failed to parse Cmd+Shift+ArrowLeft");
         assert_eq!(resolve_action(&shift_left), None);
+    }
+
+    #[test]
+    fn test_resolve_action_assist() {
+        let s: Shortcut = SHORTCUT_ASSIST.parse().expect("Failed to parse assist shortcut");
+        assert!(VISIBLE_ONLY_SHORTCUTS.contains(&SHORTCUT_ASSIST));
+        assert_eq!(resolve_action(&s), Some(SidekickAction::Assist));
+
+        // Shift+Enter and plain Enter stay with the focused app (the Ask box and other fields)
+        let shift_enter: Shortcut = "Super+Shift+Enter".parse().expect("Failed to parse Super+Shift+Enter");
+        assert_eq!(resolve_action(&shift_enter), None);
+        let enter: Shortcut = "Enter".parse().expect("Failed to parse Enter");
+        assert_eq!(resolve_action(&enter), None);
     }
 
     #[test]

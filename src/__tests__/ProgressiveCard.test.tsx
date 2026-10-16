@@ -3,7 +3,7 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import { ProgressiveCard } from "../components/cards/ProgressiveCard";
 import { CodeBlock } from "../components/cards/CodeBlock";
 import { AnswerPanel } from "../components/answer/AnswerPanel";
-import { useSessionStore, ProgressiveSolution, DetectedQuestion } from "../store/sessionStore";
+import { useSessionStore, ProgressiveSolution, requestSolve } from "../store/sessionStore";
 import { useAppStore } from "../store/appStore";
 
 const solution: ProgressiveSolution = {
@@ -21,15 +21,6 @@ const solution: ProgressiveSolution = {
     spaceComplexity: "O(N)",
     edgeCases: ["Empty window", "Clock skew"],
   },
-};
-
-const question: DetectedQuestion = {
-  questionId: "q_1",
-  timestamp: 0,
-  confidence: 0.9,
-  rawTranscript: "raw transcript",
-  extractedQuestion: "Design a rate limiter?",
-  quickPointers: ["Token bucket", "Redis Lua"],
 };
 
 const regionOf = (row: HTMLElement) => document.getElementById(row.getAttribute("aria-controls")!)!;
@@ -189,8 +180,16 @@ describe("CodeBlock", () => {
 });
 
 describe("AnswerPanel", () => {
+  const seed = (question = "Design a rate limiter?", kind: "typed" | "option" | "assist" = "typed", newThread = true) =>
+    useSessionStore.getState().beginMessage({ question, kind, newThread })!;
+
+  // Lets the test play the solver: the answer lands in the message the panel shows
+  const answer = (messageId: string, threadId: string, value: ProgressiveSolution) =>
+    useSessionStore.getState().updateMessage(threadId, messageId, { solution: value });
+
   beforeEach(() => {
     useSessionStore.getState().clearSession();
+    useSessionStore.setState({ askDraft: "", askUsesScreen: true, optionsUseScreen: false });
     useAppStore.setState({ isAskOpen: false });
   });
 
@@ -199,27 +198,40 @@ describe("AnswerPanel", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows the active question without the old quick pointers", () => {
-    useSessionStore.getState().setActiveQuestion(question);
+  it("shows the question once, above its answer, without quick pointers", () => {
+    const { threadId, messageId } = seed();
+    answer(messageId, threadId, solution);
     render(<AnswerPanel />);
 
-    expect(screen.getByText("Design a rate limiter?")).toBeDefined();
+    expect(screen.getByRole("region", { name: "Answer" })).toBeDefined();
+    expect(screen.getAllByText("Design a rate limiter?")).toHaveLength(1);
     expect(screen.queryByText("Token bucket")).toBeNull();
+    expect(screen.getByTestId("answer-summary")).toBeDefined();
   });
 
-  it("shows Thinking while solving and the answer above it", () => {
-    useSessionStore.getState().setActiveQuestion(question);
-    useSessionStore.getState().setSolution(solution);
-    useSessionStore.setState({ isSolving: true });
+  it("labels an answer that viewed the screen", () => {
+    const { threadId, messageId } = seed();
+    useSessionStore.getState().updateMessage(threadId, messageId, { viewedScreen: true });
     render(<AnswerPanel />);
 
-    expect(screen.getByTestId("answer-summary")).toBeDefined();
-    expect(screen.getByText("Thinking…")).toBeDefined();
+    expect(screen.getByText("Viewed screen")).toBeDefined();
   });
 
-  it("shows the error with a Retry that re-dispatches the solve", () => {
-    useSessionStore.getState().setActiveQuestion(question);
-    useSessionStore.setState({ solveError: "Model timed out" });
+  it("shows Thinking only on the message being streamed", () => {
+    const first = seed("First?");
+    answer(first.messageId, first.threadId, solution);
+    const second = useSessionStore.getState().beginMessage({ question: "Second?", kind: "typed", newThread: false });
+    useSessionStore.setState({ solvingMessageId: second!.messageId });
+    render(<AnswerPanel />);
+
+    expect(screen.getAllByText("Thinking…")).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toBe("Thinking…");
+    expect(screen.getByTestId("answer-summary")).toBeDefined();
+  });
+
+  it("shows the error with a Retry on the last message that reruns that message", () => {
+    const { threadId, messageId } = seed("Model question?");
+    useSessionStore.getState().updateMessage(threadId, messageId, { error: "Model timed out" });
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
     render(<AnswerPanel />);
@@ -227,26 +239,69 @@ describe("AnswerPanel", () => {
     expect(screen.getByRole("alert").textContent).toContain("Model timed out");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual(question);
     window.removeEventListener("sidekick:deep_solve", listener);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      question: "Model question?",
+      kind: "typed",
+      retryMessageId: messageId,
+    });
   });
 
-  it("close clears the question and solution and closes Ask", () => {
-    useSessionStore.getState().setActiveQuestion(question);
-    useSessionStore.getState().setSolution(solution);
+  it("an older failed message shows its error without Retry", () => {
+    const failed = seed("Failed?");
+    useSessionStore.getState().updateMessage(failed.threadId, failed.messageId, { error: "Old failure" });
+    const next = useSessionStore.getState().beginMessage({ question: "Next?", kind: "typed", newThread: false });
+    answer(next!.messageId, next!.threadId, solution);
+    render(<AnswerPanel />);
+
+    expect(screen.getByRole("alert").textContent).toContain("Old failure");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("close ends the thread, keeps it in history and closes Ask", () => {
+    seed();
     useAppStore.setState({ isAskOpen: true });
     const { container } = render(<AnswerPanel />);
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    expect(useSessionStore.getState().activeQuestion).toBeNull();
-    expect(useSessionStore.getState().progressiveSolution).toBeNull();
+    expect(useSessionStore.getState().activeThreadId).toBeNull();
+    expect(useSessionStore.getState().threads).toHaveLength(1);
     expect(useAppStore.getState().isAskOpen).toBe(false);
     expect(container.firstChild).toBeNull();
   });
 
-  it("a follow-up sets the question, dispatches the solve and clears the input", () => {
+  it("New chat ends the thread but keeps Ask open, empty, and without a pick", () => {
+    seed();
+    useSessionStore.setState({ askDraft: "half typed", pickedOption: "A pick" });
+    useAppStore.setState({ isAskOpen: true });
+    render(<AnswerPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+
+    expect(useSessionStore.getState().activeThreadId).toBeNull();
+    expect(useSessionStore.getState().threads).toHaveLength(1);
+    expect(useSessionStore.getState().pickedOption).toBeNull();
+    expect(useAppStore.getState().isAskOpen).toBe(true);
+    const input = screen.getByPlaceholderText("Ask about your screen or type a question…") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(screen.queryByText("Design a rate limiter?")).toBeNull();
+    // Opening the fresh box does not take focus
+    expect(document.activeElement).not.toBe(input);
+  });
+
+  it("New chat is disabled while no chat is open, and History stays enabled", () => {
+    useAppStore.setState({ isAskOpen: true });
+    render(<AnswerPanel />);
+
+    expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "History" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a follow-up continues the thread, dispatches the solve and clears the input", () => {
+    const { threadId, messageId } = seed();
+    answer(messageId, threadId, solution);
     useAppStore.setState({ isAskOpen: true });
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
@@ -256,27 +311,29 @@ describe("AnswerPanel", () => {
     fireEvent.change(input, { target: { value: "  How would you shard it?  " } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(useSessionStore.getState().activeQuestion?.extractedQuestion).toBe(
-      "How would you shard it?"
-    );
+    window.removeEventListener("sidekick:deep_solve", listener);
     expect(listener).toHaveBeenCalledTimes(1);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail.extractedQuestion).toBe(
-      "How would you shard it?"
-    );
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      question: "How would you shard it?",
+      kind: "typed",
+      captureWindow: true,
+    });
     expect(input.value).toBe("");
     expect(useAppStore.getState().isAskOpen).toBe(false);
-    window.removeEventListener("sidekick:deep_solve", listener);
   });
 
   it("Cmd+Enter also submits a follow-up", () => {
     useAppStore.setState({ isAskOpen: true });
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
     render(<AnswerPanel />);
     const input = screen.getByLabelText("Ask a follow-up");
 
     fireEvent.change(input, { target: { value: "Edge cases?" } });
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });
 
-    expect(useSessionStore.getState().activeQuestion?.extractedQuestion).toBe("Edge cases?");
+    window.removeEventListener("sidekick:deep_solve", listener);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail.question).toBe("Edge cases?");
   });
 
   it("an empty follow-up does nothing", () => {
@@ -289,9 +346,28 @@ describe("AnswerPanel", () => {
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(listener).not.toHaveBeenCalled();
-    expect(useSessionStore.getState().activeQuestion).toBeNull();
-    expect(screen.getByText("Ask anything")).toBeDefined();
     window.removeEventListener("sidekick:deep_solve", listener);
+    expect(listener).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().threads).toHaveLength(0);
+    expect(screen.getByPlaceholderText("Ask about your screen or type a question…")).toBeDefined();
+  });
+
+  it("the Ask box's screen toggle is on by default and can be turned off", () => {
+    useAppStore.setState({ isAskOpen: true });
+    render(<AnswerPanel />);
+    const toggle = screen.getByRole("button", { name: "Include screen" });
+
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    expect(useSessionStore.getState().askUsesScreen).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("requestSolve is what a follow-up dispatches", () => {
+    const listener = vi.fn();
+    window.addEventListener("sidekick:deep_solve", listener);
+    requestSolve({ question: "Direct?" });
+    window.removeEventListener("sidekick:deep_solve", listener);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,9 +1,9 @@
 import { useEffect } from "react";
-import { useSessionStore, DetectedQuestion } from "../store/sessionStore";
+import { useSessionStore, requestSolve } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import { safeInvoke } from "../lib/ipc";
-import { fetchLiveOptions, formatTranscript, liveOptionsErrorMessage } from "../services/ai/liveOptions";
+import { fetchLiveOptions, liveOptionsErrorMessage } from "../services/ai/liveOptions";
 
 export interface LiveOption {
   text: string;
@@ -20,22 +20,13 @@ export function buildOptions(asked: string | null, likely: string[]): LiveOption
   return options;
 }
 
-/** Answers option `index` (0-2): from a click or the global Cmd+Option+1/2/3. */
+/** Answers option `index` (0-2): from a click or the global Cmd+Option+1/2/3. Starts a new thread. */
 export function pickLiveOption(index: number) {
   const session = useSessionStore.getState();
   const option = buildOptions(session.askedQuestion, session.likelyQuestions)[index];
   if (!option) return;
 
-  const question: DetectedQuestion = {
-    questionId: `q_${Date.now()}`,
-    timestamp: Date.now(),
-    confidence: 1,
-    rawTranscript: formatTranscript(session.transcript),
-    extractedQuestion: option.text,
-    quickPointers: [],
-  };
   useSessionStore.setState({ pickedOption: option.text });
-  session.setActiveQuestion(question);
 
   useSettingsStore.getState().setIsSettingsOpen(false);
   const app = useAppStore.getState();
@@ -43,7 +34,7 @@ export function pickLiveOption(index: number) {
   app.setAskOpen(false);
   // A hotkey pick can close Ask while its input has the keyboard; hand it back
   safeInvoke("release_focus");
-  window.dispatchEvent(new CustomEvent("sidekick:deep_solve", { detail: question }));
+  requestSolve({ question: option.text, kind: "option", newThread: true, captureWindow: session.optionsUseScreen });
 }
 
 /**

@@ -1,6 +1,6 @@
 import React, { useId, useState } from "react";
 import { ChevronDown, Clock, CodeXml } from "lucide-react";
-import { useSessionStore, ProgressiveSolution } from "../../store/sessionStore";
+import type { ProgressiveSolution } from "../../store/sessionStore";
 import { CodeBlock } from "./CodeBlock";
 import { cn } from "../../lib/utils";
 
@@ -54,21 +54,11 @@ const Section: React.FC<SectionProps> = ({ rowTestId, icon, label, detail, defau
 };
 
 export interface ProgressiveCardProps {
-  solution?: ProgressiveSolution | null;
+  solution: ProgressiveSolution | null;
   className?: string;
 }
 
-export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution: propSolution, className }) => {
-  const storeSolution = useSessionStore((s) => s.progressiveSolution);
-  const storeStage1 = useSessionStore((s) => s.stage1Intuition);
-  const storeStage2 = useSessionStore((s) => s.stage2Code);
-  const storeStage3 = useSessionStore((s) => s.stage3Analysis);
-
-  const solution =
-    propSolution !== undefined
-      ? propSolution
-      : (storeSolution ?? { stage1Intuition: storeStage1, stage2Code: storeStage2, stage3Analysis: storeStage3 });
-
+export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution, className }) => {
   const stage1 = solution?.stage1Intuition;
   const stage2 = solution?.stage2Code;
   const stage3 = solution?.stage3Analysis;

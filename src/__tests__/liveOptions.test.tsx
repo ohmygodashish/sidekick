@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import {
+  assistTurns,
   fetchLiveOptions,
   formatTranscript,
   liveOptionsErrorMessage,
@@ -95,6 +96,27 @@ describe("live options service", () => {
     expect(lines).toHaveLength(12);
     expect(lines[0]).toBe("Candidate: line 3");
   });
+
+  it("Assist uses the last 90 seconds or the last six turns, whichever is more", () => {
+    const now = 1_000_000;
+    const at = (secondsAgo: number, text: string): TranscriptTurn => ({
+      id: text,
+      speaker: "interviewer",
+      text,
+      timestamp: now - secondsAgo * 1000,
+    });
+
+    // Two turns in the last 90 s, but six turns in all: the six win
+    const spread = [at(600, "a"), at(500, "b"), at(400, "c"), at(300, "d"), at(60, "e"), at(30, "f")];
+    expect(assistTurns(spread, now).map((t) => t.text)).toEqual(["a", "b", "c", "d", "e", "f"]);
+
+    // Nine turns in the last 90 s beat the last six
+    const busy = Array.from({ length: 9 }, (_, i) => at(80 - i * 8, `t${i}`));
+    expect(assistTurns(busy, now).map((t) => t.text)).toEqual(busy.map((t) => t.text));
+
+    // Fewer than six turns: all of them
+    expect(assistTurns([at(10, "only")], now).map((t) => t.text)).toEqual(["only"]);
+  });
 });
 
 describe("useLiveOptions", () => {
@@ -172,8 +194,7 @@ describe("useLiveOptions", () => {
     window.removeEventListener("sidekick:deep_solve", listener);
     expect(listener).toHaveBeenCalledTimes(1);
     const detail = (listener.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail.extractedQuestion).toBe("Dijkstra?");
-    expect(detail.rawTranscript).toBe("Interviewer: We use graphs.");
+    expect(detail).toMatchObject({ question: "Dijkstra?", kind: "option", newThread: true, captureWindow: false });
     expect(useSessionStore.getState().pickedOption).toBe("Dijkstra?");
     expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
     expect(useAppStore.getState().layoutMode).toBe("floating_hud");
@@ -206,7 +227,7 @@ describe("LiveOptions and CaptionLine", () => {
     fireEvent.click(screen.getByRole("button", { name: /BFS vs DFS/ }));
 
     window.removeEventListener("sidekick:deep_solve", listener);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail.extractedQuestion).toBe("BFS vs DFS?");
+    expect((listener.mock.calls[0][0] as CustomEvent).detail.question).toBe("BFS vs DFS?");
   });
 
   it("explains what's missing when there are no options yet", () => {

@@ -21,6 +21,11 @@ export interface DispatchOptions {
   onProgressiveUpdate?: (solution: ProgressiveSolution) => void;
 }
 
+/** MIME type of a `data:image/...;base64,` URL from the capture; PNG when there is none. */
+export function mimeTypeOfDataUrl(dataUrl: string): string {
+  return /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(dataUrl)?.[1]?.toLowerCase() ?? "image/png";
+}
+
 // Long enough for a slow model to start, short enough that a dead connection doesn't hang the panel
 const STALL_TIMEOUT_MS = 25_000;
 const STALL_MESSAGE = "The model stopped responding. Retry, or pick a faster model in Settings.";

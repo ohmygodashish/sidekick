@@ -13,14 +13,7 @@ vi.mock("../components/settings/SettingsDrawer", () => ({
   SettingsDrawer: () => <div data-testid="settings-drawer" />,
 }));
 
-const question = {
-  questionId: "q_test",
-  timestamp: Date.now(),
-  confidence: 0.99,
-  rawTranscript: "How does raft consensus work?",
-  extractedQuestion: "Explain the Raft consensus algorithm",
-  quickPointers: ["Leader election", "Log replication"],
-};
+const question = "Explain the Raft consensus algorithm";
 
 const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "More options" }));
 
@@ -52,6 +45,18 @@ describe("HUDContainer", () => {
     expect(screen.getByRole("button", { name: /Ask/ })).toBeDefined();
     expect(screen.getByRole("button", { name: /Hide/ })).toBeDefined();
     expect(screen.getByRole("button", { name: "More options" })).toBeDefined();
+  });
+
+  it("Start and Stop show the listening shortcut, and Starting… does not", () => {
+    const shortcut = () => screen.getByRole("button", { name: /Start listening|Stop listening|Starting/ }).querySelector("kbd");
+    render(<HUDContainer />);
+    expect(shortcut()?.textContent).toBe("⇧⌘\\");
+
+    act(() => useAppStore.setState({ meetingStatus: "starting" }));
+    expect(shortcut()).toBeNull();
+
+    act(() => useAppStore.setState({ meetingStatus: "live", meetingStartedAt: Date.now() }));
+    expect(shortcut()?.textContent).toBe("⇧⌘\\");
   });
 
   it("Start goes live, and Stop returns to idle", async () => {
@@ -90,7 +95,7 @@ describe("HUDContainer", () => {
   });
 
   it("Ask opens the typed question even when a question is active, without solving", () => {
-    useSessionStore.getState().setActiveQuestion(question);
+    useSessionStore.getState().beginMessage({ question, kind: "typed", newThread: true });
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
 

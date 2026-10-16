@@ -174,7 +174,7 @@ body,
     pointer-events: none;
     transition: opacity 120ms var(--sk-ease) 0ms;
   }
-  .sk-tip-host:hover > .sk-tip,
+  .sk-tip-host[data-hover] > .sk-tip,
   .sk-tip-host:has(:focus-visible) > .sk-tip {
     opacity: 1;
     transition-delay: 400ms;

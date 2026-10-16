@@ -1,10 +1,14 @@
 import React from "react";
-import { useAppStore } from "../../store/appStore";
+import { WandSparkles } from "lucide-react";
+import { useAppStore, runAssist } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { buildOptions, pickLiveOption } from "../../hooks/useLiveOptions";
 import { usePresence } from "../../hooks/usePresence";
+import { getShortcut } from "../../lib/shortcuts";
 import { cn } from "../../lib/utils";
+import { ScreenToggle } from "./ScreenToggle";
+import { Tip } from "./Tip";
 
 const SHORTCUTS = ["⌘⌥1", "⌘⌥2", "⌘⌥3"];
 
@@ -14,6 +18,7 @@ export const LiveOptions: React.FC = () => {
   const asked = useSessionStore((s) => s.askedQuestion);
   const likely = useSessionStore((s) => s.likelyQuestions);
   const picked = useSessionStore((s) => s.pickedOption);
+  const optionsUseScreen = useSessionStore((s) => s.optionsUseScreen);
   const error = useSessionStore((s) => s.optionsError);
   const hasGroqKey = useSettingsStore((s) => Boolean(s.apiKeys.groq?.trim()));
   const presence = usePresence(isLive);
@@ -30,6 +35,18 @@ export const LiveOptions: React.FC = () => {
       inert={presence.state === "closed"}
       className="sk-surface sk-pop w-full rounded-xl p-1"
     >
+      <div className="flex items-center justify-end gap-1 px-1 pb-1 pt-0.5">
+        <ScreenToggle
+          on={optionsUseScreen}
+          onChange={(on) => useSessionStore.setState({ optionsUseScreen: on })}
+        />
+        <Tip label="Assist" keys={getShortcut("assist").keys}>
+          <button type="button" className="sk-btn" onClick={runAssist}>
+            <WandSparkles className="h-3.5 w-3.5" aria-hidden="true" />
+            Assist
+          </button>
+        </Tip>
+      </div>
       {options.map((option, i) => (
         <button
           key={i}

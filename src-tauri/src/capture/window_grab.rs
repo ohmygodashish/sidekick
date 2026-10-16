@@ -97,6 +97,21 @@ pub fn find_frontmost_active_window(windows: &[WindowInfo], own_pid: i64) -> Opt
     windows.iter().find(|w| is_valid_active_window(w, own_pid))
 }
 
+/// Longest edge, in px, of a captured window image sent to the answer provider
+pub const MAX_CAPTURE_EDGE: u32 = 1280;
+
+/// Size that fits `w` x `h` within a `max` longest edge, keeping the aspect ratio. Never upscales.
+pub fn fit_within(w: u32, h: u32, max: u32) -> (u32, u32) {
+    if w.max(h) <= max {
+        return (w, h);
+    }
+    let scale = max as f64 / w.max(h) as f64;
+    (
+        ((w as f64 * scale).round() as u32).max(1),
+        ((h as f64 * scale).round() as u32).max(1),
+    )
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos_capture {
     use super::*;
@@ -110,6 +125,9 @@ pub mod macos_capture {
     use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
     use core_foundation_sys::number::kCFBooleanTrue;
     use core_graphics::access::ScreenCaptureAccess;
+    use core_graphics::base::kCGImageAlphaPremultipliedLast;
+    use core_graphics::color_space::CGColorSpace;
+    use core_graphics::context::{CGContext, CGInterpolationQuality};
     use core_graphics::geometry::{CGPoint, CGRect, CGSize};
     pub use core_graphics::image::CGImage;
     use core_graphics::window::*;
@@ -118,6 +136,12 @@ pub mod macos_capture {
     use objc::{class, msg_send, sel, sel_impl};
     use std::ffi::c_void;
     use std::ptr;
+
+    // AppKit's JPEG compression-factor key (AppKit is already loaded for NSBitmapImageRep)
+    #[allow(deprecated)]
+    extern "C" {
+        static NSImageCompressionFactor: id;
+    }
 
     unsafe fn get_i64(
         dict: CFDictionaryRef,
@@ -279,9 +303,32 @@ pub mod macos_capture {
         }
     }
 
-    /// Converts a CGImage to a PNG in memory and formats as a base64 data URL (`data:image/png;base64,...`).
+    /// Redraws a CGImage so its longest edge is at most `max_edge` px (high-quality resampling).
+    pub fn downscale_cg_image(image: &CGImage, max_edge: u32) -> Result<CGImage, String> {
+        let (w, h) = fit_within(image.width() as u32, image.height() as u32, max_edge);
+        let cs = CGColorSpace::create_device_rgb();
+        let ctx = CGContext::create_bitmap_context(
+            None,
+            w as usize,
+            h as usize,
+            8,
+            0,
+            &cs,
+            kCGImageAlphaPremultipliedLast,
+        );
+        let rect = CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(w as f64, h as f64));
+        // JPEG has no alpha: paint white first so transparent window corners don't turn black
+        ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
+        ctx.fill_rect(rect);
+        ctx.set_interpolation_quality(CGInterpolationQuality::CGInterpolationQualityHigh);
+        ctx.draw_image(rect, image);
+        ctx.create_image()
+            .ok_or_else(|| "Failed to downscale captured window image".to_string())
+    }
+
+    /// Converts a CGImage to a JPEG in memory and formats as a base64 data URL (`data:image/jpeg;base64,...`).
     #[allow(deprecated, unexpected_cfgs)]
-    pub fn encode_cg_image_to_png_base64(image: &CGImage) -> Result<String, String> {
+    pub fn encode_cg_image_to_jpeg_base64(image: &CGImage) -> Result<String, String> {
         autoreleasepool(|| unsafe {
             let rep_alloc: id = msg_send![class!(NSBitmapImageRep), alloc];
             if rep_alloc == nil {
@@ -293,20 +340,21 @@ pub mod macos_capture {
                 return Err("Failed to initialize NSBitmapImageRep with CGImage".to_string());
             }
 
-            // NSBitmapImageFileTypePNG = 4
-            let empty_props: id = msg_send![class!(NSDictionary), dictionary];
-            let data: id = msg_send![rep, representationUsingType: 4usize properties: empty_props];
+            // NSBitmapImageFileTypeJPEG = 3, compression factor 0.8
+            let factor: id = msg_send![class!(NSNumber), numberWithDouble: 0.8f64];
+            let props: id = msg_send![class!(NSDictionary), dictionaryWithObject: factor forKey: NSImageCompressionFactor];
+            let data: id = msg_send![rep, representationUsingType: 3usize properties: props];
 
             if data == nil {
                 let () = msg_send![rep, release];
-                return Err("Failed to generate PNG representation from image data".to_string());
+                return Err("Failed to generate JPEG representation from image data".to_string());
             }
 
             let len: usize = msg_send![data, length];
             let bytes_ptr: *const u8 = msg_send![data, bytes];
             if len == 0 || bytes_ptr.is_null() {
                 let () = msg_send![rep, release];
-                return Err("Captured window PNG buffer is empty".to_string());
+                return Err("Captured window JPEG buffer is empty".to_string());
             }
 
             let slice = std::slice::from_raw_parts(bytes_ptr, len);
@@ -315,13 +363,14 @@ pub mod macos_capture {
             let b64 = STANDARD.encode(slice);
             let () = msg_send![rep, release];
 
-            Ok(format!("data:image/png;base64,{}", b64))
+            Ok(format!("data:image/jpeg;base64,{}", b64))
         })
     }
 }
 
 /// Queries the macOS window hierarchy, detects the frontmost active application window,
-/// captures its visual bounds silently, and converts it to a base64 PNG data URL.
+/// captures its visual bounds silently, downscales it to `MAX_CAPTURE_EDGE`, and converts it to a
+/// base64 JPEG data URL.
 pub fn capture_frontmost_window() -> Result<WindowCaptureResponse, String> {
     #[cfg(target_os = "macos")]
     {
@@ -333,9 +382,10 @@ pub fn capture_frontmost_window() -> Result<WindowCaptureResponse, String> {
         })?;
 
         let img = macos_capture::capture_cg_image(target.window_id)?;
-        let width = img.width() as u32;
-        let height = img.height() as u32;
-        let base64_image = macos_capture::encode_cg_image_to_png_base64(&img)?;
+        let small = macos_capture::downscale_cg_image(&img, MAX_CAPTURE_EDGE)?;
+        let width = small.width() as u32;
+        let height = small.height() as u32;
+        let base64_image = macos_capture::encode_cg_image_to_jpeg_base64(&small)?;
 
         Ok(WindowCaptureResponse {
             base64_image,
@@ -671,7 +721,7 @@ mod tests {
     #[test]
     fn test_window_capture_response_serialization() {
         let response = WindowCaptureResponse {
-            base64_image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+            base64_image: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string(),
             window_title: Some("Two Sum - LeetCode".to_string()),
             app_name: Some("Google Chrome".to_string()),
             width: 1440,
@@ -679,7 +729,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&response).expect("serialization failed");
-        assert!(json.contains("data:image/png;base64,"));
+        assert!(json.contains("data:image/jpeg;base64,"));
         assert!(json.contains("Two Sum - LeetCode"));
         assert!(json.contains("Google Chrome"));
 
@@ -690,7 +740,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn test_encode_cg_image_produces_valid_png() {
+    fn test_encode_cg_image_produces_valid_jpeg() {
         use core_graphics::color_space::CGColorSpace;
         use core_graphics::context::CGContext;
         use core_graphics::geometry::{CGPoint, CGRect, CGSize};
@@ -712,22 +762,59 @@ mod tests {
         assert_eq!(img.width(), 16);
         assert_eq!(img.height(), 16);
 
-        let data_url = macos_capture::encode_cg_image_to_png_base64(&img)
-            .expect("encoding to png base64 failed");
+        let data_url = macos_capture::encode_cg_image_to_jpeg_base64(&img)
+            .expect("encoding to jpeg base64 failed");
         assert!(
-            data_url.starts_with("data:image/png;base64,"),
+            data_url.starts_with("data:image/jpeg;base64,"),
             "Must start with data URL scheme"
         );
 
-        let b64_part = data_url.trim_start_matches("data:image/png;base64,");
+        let b64_part = data_url.trim_start_matches("data:image/jpeg;base64,");
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
-        let png_bytes = STANDARD.decode(b64_part).expect("valid base64");
-        // Check PNG signature: 89 50 4E 47 0D 0A 1A 0A
+        let jpeg_bytes = STANDARD.decode(b64_part).expect("valid base64");
+        // JPEG start-of-image marker: FF D8
         assert_eq!(
-            &png_bytes[0..8],
-            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-            "Decoded bytes must match valid PNG signature"
+            &jpeg_bytes[0..2],
+            &[0xFF, 0xD8],
+            "Decoded bytes must start with the JPEG SOI marker"
         );
+    }
+
+    #[test]
+    fn test_fit_within_caps_longest_edge() {
+        // Landscape and portrait keep their aspect ratio
+        assert_eq!(fit_within(2560, 1600, 1280), (1280, 800));
+        assert_eq!(fit_within(1600, 2560, 1280), (800, 1280));
+        // Exactly the limit, or already smaller: unchanged
+        assert_eq!(fit_within(1280, 1280, 1280), (1280, 1280));
+        assert_eq!(fit_within(1280, 720, 1280), (1280, 720));
+        assert_eq!(fit_within(800, 600, 1280), (800, 600));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_downscale_cg_image_to_max_edge() {
+        use core_graphics::color_space::CGColorSpace;
+        use core_graphics::context::CGContext;
+        use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+
+        let cs = CGColorSpace::create_device_rgb();
+        let ctx = CGContext::create_bitmap_context(
+            None,
+            2560,
+            1600,
+            8,
+            0,
+            &cs,
+            core_graphics::base::kCGImageAlphaPremultipliedLast,
+        );
+        ctx.set_rgb_fill_color(0.2, 0.4, 0.8, 1.0);
+        ctx.fill_rect(CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(2560.0, 1600.0)));
+        let img = ctx.create_image().expect("failed to make image from context");
+
+        let small = macos_capture::downscale_cg_image(&img, MAX_CAPTURE_EDGE)
+            .expect("downscaling failed");
+        assert_eq!((small.width(), small.height()), (1280, 800));
     }
 }

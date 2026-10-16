@@ -44,6 +44,7 @@ const MeetingButton: React.FC = () => {
 
   const isLive = meetingStatus === "live";
   const isBusy = meetingStatus === "starting" || meetingStatus === "stopping";
+  const toggleListening = getShortcut("toggle_listening");
 
   let content: React.ReactNode;
   if (isBusy) {
@@ -59,6 +60,7 @@ const MeetingButton: React.FC = () => {
         <LevelDots />
         Stop
         <span className="tabular-nums text-sk-fg-3">{formatElapsed(now - (meetingStartedAt ?? now))}</span>
+        <kbd className="sk-kbd">{toggleListening.keys.join("")}</kbd>
       </>
     );
   } else {
@@ -66,20 +68,22 @@ const MeetingButton: React.FC = () => {
       <>
         <Mic className="h-3.5 w-3.5" aria-hidden="true" />
         Start
+        <kbd className="sk-kbd">{toggleListening.keys.join("")}</kbd>
       </>
     );
   }
 
-  // One button with a fixed minimum width, so the bar never changes size between states
+  // One button with a fixed minimum width, so the bar never changes size between states. Stop with its
+  // dots, timer and shortcut is the widest; Starting… and Stopping… fit inside the same width.
   return (
     <Tip
       label={isLive ? "Stop listening" : "Start listening"}
-      keys={getShortcut("toggle_listening").keys}
+      keys={toggleListening.keys}
       disabled={isBusy}
     >
       <button
         type="button"
-        className="sk-btn min-w-[132px] justify-center"
+        className="sk-btn min-w-[184px] justify-center"
         disabled={isBusy}
         aria-label={isLive ? "Stop listening" : isBusy ? undefined : "Start listening"}
         onClick={() => (isLive ? stopMeeting() : startMeeting())}
@@ -107,6 +111,8 @@ export const ControlBar: React.FC = () => {
       setLayoutMode("floating_hud");
     }
     setAskOpen(true);
+    // Only this button asks for keyboard focus; the box opening on show leaves focus alone
+    useAppStore.setState((s) => ({ askFocusRequest: s.askFocusRequest + 1 }));
   };
 
   return (

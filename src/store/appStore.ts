@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invokeInTauri, safeInvoke } from "../lib/ipc";
-import { useSessionStore } from "./sessionStore";
+import { ASSIST_LABEL } from "../services/ai/promptTemplates";
+import { requestSolve, useSessionStore } from "./sessionStore";
 import { useSettingsStore } from "./settingsStore";
 
 // "dynamic_notch" now means compact view (bar only); the name is kept for Rust and saved settings.
@@ -41,6 +42,7 @@ export interface AppState {
   audioLevels: AudioLevels;
   sttError: SttError | null;
   isAskOpen: boolean; // answer panel opened by Ask with no detected question
+  askFocusRequest: number; // bumped by the Ask button only: the panel focuses its box once per bump
 
   // Actions
   setLayoutMode: (mode: LayoutMode) => Promise<void>;
@@ -68,6 +70,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   audioLevels: ZERO_LEVELS,
   sttError: null,
   isAskOpen: false,
+  askFocusRequest: 0,
 
   setLayoutMode: async (mode: LayoutMode) => {
     set({ layoutMode: mode });
@@ -101,6 +104,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   triggerPanic: async () => {
     set({ isPanicked: true, isVisible: false, ...MEETING_IDLE });
+    useSessionStore.getState().clearThreads();
     await safeInvoke("trigger_panic");
   },
 
@@ -127,6 +131,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await invokeInTauri("stop_audio_capture");
       set({ ...MEETING_IDLE, meetingError: null });
+      // This meeting's chat history goes with it
+      useSessionStore.getState().clearThreads();
     } catch {
       // Capture may still be running, so stay live and say so
       set({ meetingStatus: "live", meetingError: STOP_FAILED_MESSAGE });
@@ -172,6 +178,39 @@ export async function toggleMeeting(): Promise<void> {
   else if (meetingStatus === "idle") await startMeeting();
 }
 
+/** Sends the typed Ask question: it continues the active thread, or starts one. */
+export function submitTypedAsk(): void {
+  const session = useSessionStore.getState();
+  const question = session.askDraft.trim();
+  if (!question) return;
+  useSessionStore.setState({ askDraft: "" });
+  useAppStore.getState().setAskOpen(false);
+  // Ask may have the keyboard; hand it back to the app underneath
+  safeInvoke("release_focus");
+  requestSolve({ question, kind: "typed", captureWindow: session.askUsesScreen });
+}
+
+/**
+ * New chat (⌘R and the panel's button): ends the active thread, which stays in History, and leaves
+ * Ask open and empty. Focus is not moved.
+ */
+export function startNewChat(): void {
+  useSessionStore.getState().clearAnswer();
+  useSessionStore.setState({ askDraft: "" });
+  useAppStore.getState().setAskOpen(true);
+}
+
+/** Assist (⌘↵): answers now from the screen and the recent conversation, in a new thread, without taking focus. */
+export function runAssist(): void {
+  useSettingsStore.getState().setIsSettingsOpen(false);
+  useSessionStore.setState({ pickedOption: null });
+  const app = useAppStore.getState();
+  if (app.layoutMode === "dynamic_notch") app.setLayoutMode("floating_hud");
+  app.setAskOpen(false);
+  safeInvoke("release_focus");
+  requestSolve({ question: ASSIST_LABEL, kind: "assist", newThread: true, captureWindow: true });
+}
+
 /**
  * Subscribes to Tauri backend events to synchronize hotkeys and window state.
  * Returns an unlisten function for cleanup on component unmount.
@@ -188,15 +227,17 @@ export async function setupAppEventListeners(): Promise<() => void> {
       () => {
         // Rust purges and stops audio on panic, so the meeting is over
         useAppStore.setState({ isPanicked: true, isVisible: false, ...MEETING_IDLE });
+        useSessionStore.getState().clearThreads();
       }
     );
     unlisteners.push(unlistenPanic);
 
     // 2. Visibility toggled event (Cmd + \)
+    // Showing opens the Ask box too, but never focuses it: showing Sidekick must not take the keyboard
     const handleVisibility = (payload: { visible: boolean }) => {
       useAppStore.setState({
         isVisible: payload.visible,
-        ...(payload.visible ? { isPanicked: false } : {}),
+        ...(payload.visible ? { isPanicked: false, isAskOpen: true } : {}),
       });
     };
 
@@ -298,12 +339,22 @@ export async function setupAppEventListeners(): Promise<() => void> {
     });
     unlisteners.push(unlistenSettings);
 
-    // 10. New chat (Cmd + R): clears the answer and closes Ask, as the panel's Close does
-    const unlistenNewChat = await listen("sidekick://new_chat", () => {
-      useSessionStore.getState().clearAnswer();
-      useAppStore.getState().setAskOpen(false);
-    });
+    // 10. New chat (Cmd + R): ends the thread and resets Ask to empty, without moving focus
+    const unlistenNewChat = await listen("sidekick://new_chat", () => startNewChat());
     unlisteners.push(unlistenNewChat);
+
+    // 11. Assist (⌘↵): sends the typed follow-up if its box is showing and has text, otherwise answers now
+    const unlistenAssist = await listen("sidekick://assist", () => {
+      // The follow-up box shows while Ask is open or a chat is open
+      // Settings and compact view hide the answer panel, so its box counts as hidden then
+      const boxShowing =
+        !useSettingsStore.getState().isSettingsOpen &&
+        useAppStore.getState().layoutMode !== "dynamic_notch" &&
+        (useAppStore.getState().isAskOpen || useSessionStore.getState().activeThreadId !== null);
+      if (boxShowing && useSessionStore.getState().askDraft.trim()) submitTypedAsk();
+      else runAssist();
+    });
+    unlisteners.push(unlistenAssist);
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.warn("[Sidekick Events] Failed to bind Tauri event listeners:", err);

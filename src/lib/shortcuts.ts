@@ -7,6 +7,7 @@ export type ShortcutId =
   | "show_hide"
   | "toggle_listening"
   | "new_chat"
+  | "assist"
   | "open_settings"
   | "panic"
   | "click_through"
@@ -31,6 +32,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "show_hide", label: "Show or hide Sidekick", keys: ["⌘", "\\"], group: "General", whileVisible: false },
   { id: "toggle_listening", label: "Start or stop listening", keys: ["⇧", "⌘", "\\"], group: "General", whileVisible: false },
   { id: "new_chat", label: "Start a new chat", keys: ["⌘", "R"], group: "General", whileVisible: true },
+  { id: "assist", label: "Assist: answer from screen and conversation", keys: ["⌘", "↵"], group: "General", whileVisible: true },
   { id: "open_settings", label: "Open settings", keys: ["⌘", ","], group: "General", whileVisible: true },
   { id: "panic", label: "Panic: wipe and quit", keys: ["⌘", "Esc"], group: "General", whileVisible: false },
   { id: "click_through", label: "Click-through", keys: ["⌘", "⇧", "C"], group: "General", whileVisible: false },
