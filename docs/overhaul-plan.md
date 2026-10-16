@@ -15,7 +15,7 @@ Audit IDs refer to [`audit.md`](audit.md).
 | --- | --- |
 | Window | One fixed transparent window (600 pt wide, screen height, top-centre) that never resizes. Rust polls the cursor and passes clicks through everywhere except the UI's surfaces, which the frontend reports. (Shrink-to-fit was tried first: resizing WKWebView blinked the page, and pinning the web view inside a resizing window broke WebKit's hover.) |
 | Position | Top-centre of the screen, just under the menu bar, on every launch. Dragging moves it for the session only; nothing is persisted. |
-| Listening feedback | Two level dots inside the Stop button (them, you) from a throttled Rust level event, plus one caption line under the bar with the latest transcribed sentence and its speaker. |
+| Listening feedback | Two level dots inside the Stop button (sky = system audio, orange = microphone) from a throttled Rust level event, plus a two-line caption under the bar (System / Microphone) with each source's latest sentence. |
 | Live options | While a meeting is live, three numbered options sit under the caption and update as the conversation goes on. Before any question, all three are questions the interviewer is likely to ask next on the current topic. When a real question is asked, it takes slot 1, marked "Asked", and stays pinned there until the next question is asked. Slots 2–3 keep rolling. Nothing is answered automatically. |
 | Picking | Click an option, or press the global hotkeys ⌘⌥1 / ⌘⌥2 / ⌘⌥3 (they work while the meeting app has focus). |
 | Layout | Bar → caption → options → answer. The options stay visible above a streaming answer, with the picked one highlighted; picking another replaces the answer. |
@@ -33,7 +33,7 @@ Audit IDs refer to [`audit.md`](audit.md).
 - Click-through on: amber ring on the bar and a "Click-through on" pill. The menu also closes on window blur.
 - Debug builds: `SIDEKICK_DEV_VISIBLE=1` skips screen-share hiding and shows the window at launch, for testing.
 
-### 2. Core fixes (two parallel Haiku agents, Opus review)
+### 2. Core fixes (two parallel Haiku agents, Opus review) — done
 
 - **AI (TypeScript)**:
   - Remove the mock fallback (A1).
@@ -46,7 +46,7 @@ Audit IDs refer to [`audit.md`](audit.md).
   - Fix the Objective-C bridge's retain and stop race (R2).
   - Add the throttled `audio_level` event.
 
-### 3. Live options and listening UI (single agent)
+### 3. Live options and listening UI (single agent) — done
 
 - **Suggestion service** (Groq, fast model):
   - Runs on every finalised turn from either speaker, using the recent transcript.
@@ -59,7 +59,7 @@ Audit IDs refer to [`audit.md`](audit.md).
 - **Hotkeys**: global ⌘⌥1–3 in Rust, emitting `sidekick://pick_option`.
 - **Removed**: the old quick-pointers state and the in-window ⌘↵ hint.
 
-### 4. Theme, consistency and motion (Haiku agents for the consistency sweep, Opus review)
+### 4. Theme, consistency and motion (Haiku agents for the consistency sweep, Opus review) — done
 
 - **Theme variables** in `index.css` for light and dark, mapped through Tailwind.
 - **Theme setting** (System / Light / Dark) in Settings, applied as `data-theme` on `<html>`.
