@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Orbit simplified for 64px and below: thicker ring, larger moons, no shading. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#18181b"/>
+  <rect x="104" y="104" width="816" height="816" rx="181" fill="none" stroke="#fff" stroke-opacity="0.16" stroke-width="12"/>
+  <g transform="rotate(-20 512 512)">
+    <path d="M172 512 A340 120 0 0 1 852 512" fill="none" stroke="#71717a" stroke-width="56"/>
+    <circle cx="512" cy="512" r="190" fill="#3f3f46"/>
+    <path d="M852 512 A340 120 0 0 1 172 512" fill="none" stroke="#18181b" stroke-width="112"/>
+    <path d="M852 512 A340 120 0 0 1 172 512" fill="none" stroke="#71717a" stroke-width="56"/>
+    <circle cx="806" cy="572" r="72" fill="#fb923c" stroke="#18181b" stroke-width="24"/>
+    <circle cx="218" cy="452" r="72" fill="#38bdf8" stroke="#18181b" stroke-width="24"/>
+  </g>
+</svg>
