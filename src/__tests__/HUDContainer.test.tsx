@@ -88,9 +88,8 @@ describe("HUDContainer", () => {
     expect(useAppStore.getState().isAskOpen).toBe(true);
   });
 
-  it("Ask with a detected question starts a solve for it", () => {
+  it("Ask opens the typed question even when a question is active, without solving", () => {
     useSessionStore.getState().setActiveQuestion(question);
-    const stored = useSessionStore.getState().activeQuestion;
     const listener = vi.fn();
     window.addEventListener("sidekick:deep_solve", listener);
 
@@ -98,8 +97,8 @@ describe("HUDContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
 
     window.removeEventListener("sidekick:deep_solve", listener);
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual(stored);
+    expect(listener).not.toHaveBeenCalled();
+    expect(useAppStore.getState().isAskOpen).toBe(true);
   });
 
   it("compact view hides the answer panel, and Ask brings it back", () => {
@@ -132,13 +131,17 @@ describe("HUDContainer", () => {
     expect(alert.getAttribute("title")).toBe("Permission denied");
   });
 
+  // The menu plays a short exit before unmounting, so "closed" is the trigger's state
+  const expectMenuClosed = () =>
+    expect(screen.getByRole("button", { name: "More options" }).getAttribute("aria-expanded")).toBe("false");
+
   it("More options menu toggles compact view, click-through and settings", () => {
     render(<HUDContainer />);
 
     openMenu();
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Compact view/ }));
     expect(useAppStore.getState().layoutMode).toBe("dynamic_notch");
-    expect(screen.queryByRole("menu")).toBeNull();
+    expectMenuClosed();
 
     openMenu();
     expect(
@@ -150,7 +153,7 @@ describe("HUDContainer", () => {
     openMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: /Settings/ }));
     expect(useSettingsStore.getState().isSettingsOpen).toBe(true);
-    expect(screen.queryByRole("menu")).toBeNull();
+    expectMenuClosed();
   });
 
   it("opening the menu focuses its first item", () => {
@@ -188,15 +191,17 @@ describe("HUDContainer", () => {
     openMenu();
 
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
+    expectMenuClosed();
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("pointer-down outside the menu closes it", () => {
+  it("pointer-down outside the menu closes it, and it unmounts after its exit", async () => {
     render(<HUDContainer />);
     openMenu();
 
     fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole("menu")).toBeNull();
+    expectMenuClosed();
+    expect(screen.getByRole("menu").getAttribute("data-state")).toBe("closed");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 });

@@ -1,6 +1,19 @@
 # Sidekick audit, 16 Oct 2026 (HEAD 67eb208)
 
-> **Status update (16 Oct 2026, after the UI redesign and the config-file storage change; not yet committed).**
+> **Status update 2 (16 Oct 2026, usability overhaul on `fix/usability-overhaul`, see [`overhaul-plan.md`](overhaul-plan.md)).**
+>
+> **Fixed:**
+> - AI: A1 (no canned answers; missing key and provider errors are shown), A2 (model resets per provider), A3 (25 s stall timeout, empty-answer error), A4 (current default ids, with a settings migration), A5 (GPT-5 models get `max_completion_tokens`), AI-N7 for the new live-options and answer prompts (transcript sent inside `<transcript>` delimiters).
+> - Frontend: F3 (Save and Burn report backend failures), FE-N7 (the old detector hook is gone), SW-9 (live audio level dots).
+> - Audio: R1 and AU-N1 (no invented transcripts; `sidekick://stt_error`), R2 (ARC-safe bridge handle; stop waits, removes the output and drains the queue before freeing), R3 (start and stop run off the main thread), AU-N3 (idempotent start), AU-N6 (a start timeout stops the stream), AU-N9 (one reused STT client, with a User-Agent), AU-N11 (Groq `language=en`; the filler filter is still open).
+> - Window: the 800×600 click-blocking window is replaced by a fixed window that passes clicks through everywhere except the UI.
+> - Design: themes (light and dark), entrance and exit transitions, text cross-fades, fixed-width meeting button.
+>
+> **Still open:** S2 (`csp: null`), S4 and S5 (build script), S9 (minimum macOS version), F4, F8, F9, A6–A11 except as noted, AU-N8, AU-N10, and the start-after-panic leak of old buffers into a new session (narrow).
+>
+> ---
+>
+> **Status update (16 Oct 2026, after the UI redesign and the config-file storage change; committed in 2d8b11b and b3a1f35).**
 >
 > **Fixed:**
 > - Frontend: F1, F2, F6, F7; FE-N1 (Burn now ends the meeting, and Start clears the audio panic flag); FE-N2, FE-N3, FE-N5, FE-N6.

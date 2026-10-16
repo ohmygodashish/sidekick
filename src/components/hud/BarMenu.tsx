@@ -13,6 +13,7 @@ import { useAppStore } from "../../store/appStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { OpacityControl } from "./OpacityControl";
 import { cn } from "../../lib/utils";
+import { usePresence } from "../../hooks/usePresence";
 
 interface MenuItemProps {
   icon: LucideIcon;
@@ -35,12 +36,12 @@ const MenuItem: React.FC<MenuItemProps> = ({
     type="button"
     role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
     aria-checked={checked}
-    className={cn("sk-menu-item", danger && "text-red-300")}
+    className={cn("sk-menu-item", danger && "text-sk-danger")}
     onClick={onSelect}
   >
-    <Icon className={cn("h-3.5 w-3.5", danger && "text-red-400")} aria-hidden="true" />
+    <Icon className={cn("h-3.5 w-3.5", danger ? "text-sk-danger" : "text-sk-fg-3")} aria-hidden="true" />
     <span className="flex-1">{label}</span>
-    {checked && <Check className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />}
+    {checked && <Check className="h-3.5 w-3.5 text-sk-accent" aria-hidden="true" />}
     <kbd className="sk-kbd">{shortcut}</kbd>
   </button>
 );
@@ -50,6 +51,7 @@ const menuItems = (menu: HTMLElement | null) =>
 
 export const BarMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
+  const menu = usePresence(open);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -73,8 +75,14 @@ export const BarMenu: React.FC = () => {
     const onMouseDown = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
+    // Clicks outside the UI pass through to other apps, so leaving the window closes it too
+    const onBlur = () => setOpen(false);
     document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [open]);
 
   const closeMenu = () => {
@@ -117,24 +125,26 @@ export const BarMenu: React.FC = () => {
         <Ellipsis className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
 
-      {open && (
+      {menu.mounted && (
         <div
           ref={menuRef}
           role="menu"
           aria-label="More options"
-          className="sk-menu absolute right-0 top-full z-10 mt-2 w-64"
+          data-state={menu.state}
+          inert={menu.state === "closed"}
+          className="sk-menu sk-pop absolute right-0 top-full z-10 mt-2 w-64"
         >
           <div className="flex items-center gap-2 px-2.5 py-1.5">
-            <SunDim className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
-            <label htmlFor="sk-opacity" className="text-[13px] text-zinc-200">
+            <SunDim className="h-3.5 w-3.5 shrink-0 text-sk-fg-3" aria-hidden="true" />
+            <label htmlFor="sk-opacity" className="text-[13px] text-sk-fg-2">
               Opacity
             </label>
             <OpacityControl />
-            <span className="w-9 text-right text-[12px] tabular-nums text-zinc-400">
+            <span className="w-9 text-right text-[12px] tabular-nums text-sk-fg-3">
               {Math.round(opacity * 100)}%
             </span>
           </div>
-          <div role="separator" className="my-1 h-px bg-white/10" />
+          <div role="separator" className="my-1 h-px bg-sk-line" />
           <MenuItem
             icon={Minimize2}
             label="Compact view"
@@ -155,7 +165,7 @@ export const BarMenu: React.FC = () => {
             shortcut="⌘,"
             onSelect={choose(toggleSettings)}
           />
-          <div role="separator" className="my-1 h-px bg-white/10" />
+          <div role="separator" className="my-1 h-px bg-sk-line" />
           <MenuItem
             icon={OctagonX}
             label="Panic"

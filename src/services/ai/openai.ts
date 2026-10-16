@@ -1,16 +1,19 @@
 import { readSSEStream } from "./streamParser";
+import { assertOk } from "./errors";
 import { cleanBase64Data, ProviderStreamRequest } from "./openrouter";
 
 /**
  * Builds OpenAI Chat Completions payload with vision image_url support.
  */
 export function buildOpenAIPayload(request: ProviderStreamRequest) {
-  let model = request.model || "gpt-4o";
-  if (model.startsWith("openai/")) {
+  let model = request.model || "gpt-5.6-luna";
+  // Only OpenAI's own endpoint drops the prefix; Groq's ids include it (openai/gpt-oss-120b)
+  if (!request.endpoint && model.startsWith("openai/")) {
     model = model.slice("openai/".length);
   }
 
-  const isReasoningModel = /^o[13](?:-mini|-preview)?/i.test(model);
+  // o-series and GPT-5 models reject temperature and max_tokens
+  const isReasoningModel = /^(o\d|gpt-5)/i.test(model);
   const messages: Array<{ role: string; content: any }> = [];
 
   if (request.systemPrompt) {
@@ -77,12 +80,7 @@ export async function streamOpenAI(
     signal: request.signal,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `OpenAI HTTP ${response.status} ${response.statusText}: ${errorBody}`
-    );
-  }
+  await assertOk(response);
 
   let accumulated = "";
 
@@ -104,7 +102,8 @@ export async function streamOpenAI(
         // Partial or malformed SSE line, ignore
       }
     },
-    request.signal
+    request.signal,
+    request.onActivity
   );
 
   return accumulated;

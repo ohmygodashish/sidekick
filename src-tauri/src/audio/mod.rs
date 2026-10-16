@@ -20,17 +20,17 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub use mic_audio::MicAudioCapture;
 pub use mixer::{
-    compute_rms, downmix_to_mono, resample_linear, AudioChannel, AudioChunk, AudioMixer, Channel,
-    VadConfig, DEFAULT_RMS_THRESHOLD, DEFAULT_TURN_SILENCE_SECS, TARGET_SAMPLE_RATE,
+    compute_rms, downmix_to_mono, resample_linear, AudioChannel, AudioChunk, AudioLevelMeter, AudioMixer,
+    Channel, VadConfig, DEFAULT_RMS_THRESHOLD, DEFAULT_TURN_SILENCE_SECS, TARGET_SAMPLE_RATE,
 };
 pub use sck_audio::SckAudioCapture;
 pub use stt_dispatcher::{
-    channel_to_speaker, generate_turn_id, AsyncSttWorker, SttChunk, SttDispatcher, SttEngineType,
-    EVENT_STT_CHUNK, EVENT_STT_ENGINE_CHANGED,
+    channel_to_speaker, emit_outcome, generate_turn_id, AsyncSttWorker, SttChunk, SttDispatcher,
+    SttEngineType, EVENT_STT_CHUNK, EVENT_STT_ENGINE_CHANGED, EVENT_STT_ERROR,
 };
 pub use whisper::{
     download_model, get_models_dir, is_metal_supported, list_available_models, resolve_model_path,
@@ -85,25 +85,18 @@ pub struct AudioState {
     mic_stream: Arc<Mutex<Option<MicAudioCapture>>>,
     dispatcher: Arc<SttDispatcher>,
     worker: Arc<AsyncSttWorker>,
+    level_meter: Arc<AudioLevelMeter>,
+    /// Serializes start and stop, so a second start cannot open a second stream while the first is opening
+    lifecycle: Mutex<()>,
+    /// Closed before streams stop, so late buffers never reach the mixer or the level meter
+    sink_open: Arc<AtomicBool>,
     is_capturing: AtomicBool,
     is_panicked: Arc<AtomicBool>,
 }
 
 impl Default for AudioState {
     fn default() -> Self {
-        let is_panicked = Arc::new(AtomicBool::new(false));
-        let dispatcher = Arc::new(SttDispatcher::default());
-        let worker = Arc::new(AsyncSttWorker::new(dispatcher.clone(), is_panicked.clone()));
-
-        Self {
-            mixer: Arc::new(Mutex::new(AudioMixer::default())),
-            sck_stream: Arc::new(Mutex::new(None)),
-            mic_stream: Arc::new(Mutex::new(None)),
-            dispatcher,
-            worker,
-            is_capturing: AtomicBool::new(false),
-            is_panicked,
-        }
+        Self::with_dispatcher(Arc::new(SttDispatcher::default()))
     }
 }
 
@@ -119,6 +112,9 @@ impl AudioState {
             mic_stream: Arc::new(Mutex::new(None)),
             dispatcher,
             worker,
+            level_meter: Arc::new(AudioLevelMeter::default()),
+            lifecycle: Mutex::new(()),
+            sink_open: Arc::new(AtomicBool::new(false)),
             is_capturing: AtomicBool::new(false),
             is_panicked,
         }
@@ -157,14 +153,22 @@ impl AudioState {
         }
     }
 
-    /// Starts audio capture on both channels according to configuration
+    /// Starts audio capture on both channels according to configuration.
+    /// Does nothing if capture is already running, so repeated starts never stack streams.
     pub fn start<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         config: AudioCaptureConfig,
     ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        if self.is_capturing.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // Reset panic state when explicitly starting audio capture
         self.is_panicked.store(false, Ordering::SeqCst);
+        self.level_meter.reset();
+        self.sink_open.store(true, Ordering::SeqCst);
 
         // 1. Configure audio mixer VAD
         let vad_config = VadConfig {
@@ -184,27 +188,7 @@ impl AudioState {
 
         // 2. Channel 0: ScreenCaptureKit System Audio (Interviewer)
         if config.capture_interviewer {
-            let mixer_clone = self.mixer.clone();
-            let app_handle = app.clone();
-            let worker = self.worker.clone();
-
-            match SckAudioCapture::start(TARGET_SAMPLE_RATE, move |samples, sample_rate, channels| {
-                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events
-                let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
-                    mixer.process_samples(Channel::Interviewer, samples, sample_rate, channels)
-                } else {
-                    None
-                };
-
-                // Task 10 Review Fix: Decouple STT from real-time audio threads via bounded async queue
-                if let Some(chunk) = maybe_chunk {
-                    let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    let app_handle_for_stt = app_handle.clone();
-                    worker.try_enqueue(chunk, move |stt_chunk| {
-                        let _ = app_handle_for_stt.emit(EVENT_STT_CHUNK, stt_chunk);
-                    });
-                }
-            }) {
+            match SckAudioCapture::start(TARGET_SAMPLE_RATE, self.channel_sink(app.clone(), Channel::Interviewer)) {
                 Ok(sck) => {
                     let mut guard = self.sck_stream.lock().map_err(|e| e.to_string())?;
                     *guard = Some(sck);
@@ -215,35 +199,15 @@ impl AudioState {
                 }
             }
         } else {
-            let mut guard = self.sck_stream.lock().map_err(|e| e.to_string())?;
-            if let Some(mut stream) = guard.take() {
+            let old = self.sck_stream.lock().map_err(|e| e.to_string())?.take();
+            if let Some(mut stream) = old {
                 stream.stop();
             }
         }
 
         // 3. Channel 1: Candidate Microphone Audio
         if config.capture_candidate {
-            let mixer_clone = self.mixer.clone();
-            let app_handle = app.clone();
-            let worker = self.worker.clone();
-
-            match MicAudioCapture::start(move |samples, sample_rate, channels| {
-                // Task 9 Review Fix: Release mixer mutex BEFORE emitting IPC events
-                let maybe_chunk = if let Ok(mut mixer) = mixer_clone.lock() {
-                    mixer.process_samples(Channel::Candidate, samples, sample_rate, channels)
-                } else {
-                    None
-                };
-
-                // Task 10 Review Fix: Decouple STT from real-time audio threads via bounded async queue
-                if let Some(chunk) = maybe_chunk {
-                    let _ = app_handle.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
-                    let app_handle_for_stt = app_handle.clone();
-                    worker.try_enqueue(chunk, move |stt_chunk| {
-                        let _ = app_handle_for_stt.emit(EVENT_STT_CHUNK, stt_chunk);
-                    });
-                }
-            }) {
+            match MicAudioCapture::start(self.channel_sink(app.clone(), Channel::Candidate)) {
                 Ok(mic) => {
                     let mut guard = self.mic_stream.lock().map_err(|e| e.to_string())?;
                     *guard = Some(mic);
@@ -254,10 +218,16 @@ impl AudioState {
                 }
             }
         } else {
-            let mut guard = self.mic_stream.lock().map_err(|e| e.to_string())?;
-            if let Some(mut stream) = guard.take() {
+            let old = self.mic_stream.lock().map_err(|e| e.to_string())?.take();
+            if let Some(mut stream) = old {
                 stream.stop();
             }
+        }
+
+        // purge() doesn't take `lifecycle`, so a panic can land while the streams were opening
+        if self.is_panicked.load(Ordering::SeqCst) {
+            self.close_streams();
+            return Err("Audio capture was cancelled by panic".to_string());
         }
 
         let snapshot = self.snapshot();
@@ -283,22 +253,49 @@ impl AudioState {
         Ok(())
     }
 
+    /// Callback for one channel: meters its level, feeds the mixer, and queues finished turns for STT
+    fn channel_sink<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        channel: Channel,
+    ) -> impl Fn(&[f32], u32, u16) + Send + Sync + 'static {
+        let mixer = self.mixer.clone();
+        let worker = self.worker.clone();
+        let meter = self.level_meter.clone();
+        let sink_open = self.sink_open.clone();
+
+        move |samples: &[f32], sample_rate: u32, channels: u16| {
+            // Streams stop asynchronously, so late buffers must not reach the mixer or the meter
+            if !sink_open.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Some((interviewer, candidate)) = meter.record(channel, samples) {
+                emit_audio_level(&app, interviewer, candidate);
+            }
+
+            // Release the mixer mutex BEFORE emitting IPC events
+            let maybe_chunk = if let Ok(mut mixer_guard) = mixer.lock() {
+                mixer_guard.process_samples(channel, samples, sample_rate, channels)
+            } else {
+                None
+            };
+
+            // Decouple STT from real-time audio threads via bounded async queue
+            if let Some(chunk) = maybe_chunk {
+                let _ = app.emit(EVENT_AUDIO_TURN_COMPLETED, &chunk);
+                let app_for_stt = app.clone();
+                worker.try_enqueue(chunk, move |outcome| emit_outcome(&app_for_stt, &outcome));
+            }
+        }
+    }
+
     /// Stops audio capture across all streams and notifies frontend
     pub fn stop<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().map_err(|e| e.to_string())?;
         self.is_capturing.store(false, Ordering::SeqCst);
+        self.close_streams();
 
-        if let Ok(mut guard) = self.sck_stream.lock() {
-            if let Some(mut stream) = guard.take() {
-                stream.stop();
-            }
-        }
-
-        if let Ok(mut guard) = self.mic_stream.lock() {
-            if let Some(mut stream) = guard.take() {
-                stream.stop();
-            }
-        }
-
+        emit_audio_level(app, 0.0, 0.0);
         let _ = app.emit(
             EVENT_AUDIO_STATUS_CHANGED,
             serde_json::json!({
@@ -311,15 +308,31 @@ impl AudioState {
         Ok(())
     }
 
+    /// Closes the sink, then stops both streams. Stops run outside the stream locks: the
+    /// synchronous state query on the main thread also takes them.
+    fn close_streams(&self) {
+        self.sink_open.store(false, Ordering::SeqCst);
+        let sck = self.sck_stream.lock().ok().and_then(|mut g| g.take());
+        if let Some(mut stream) = sck {
+            stream.stop();
+        }
+        let mic = self.mic_stream.lock().ok().and_then(|mut g| g.take());
+        if let Some(mut stream) = mic {
+            stream.stop();
+        }
+    }
+
     /// Synchronously halts all audio streams and purges memory buffers in < 25ms (REQ-004, SEC-003)
     pub fn purge(&self) {
         let start = std::time::Instant::now();
         self.is_panicked.store(true, Ordering::SeqCst);
+        self.sink_open.store(false, Ordering::SeqCst);
         self.is_capturing.store(false, Ordering::SeqCst);
 
         if let Ok(mut guard) = self.sck_stream.lock() {
-            if let Some(mut stream) = guard.take() {
-                stream.stop();
+            if let Some(stream) = guard.take() {
+                // The bridge stop can wait up to 2 s, so it runs off the panic path
+                std::thread::spawn(move || drop(stream));
             }
         }
 
@@ -340,28 +353,38 @@ impl AudioState {
     }
 }
 
+fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, interviewer: f32, candidate: f32) {
+    let _ = app.emit(
+        EVENT_AUDIO_LEVEL,
+        serde_json::json!({ "interviewer": interviewer, "candidate": candidate }),
+    );
+}
+
 pub mod commands {
     use super::*;
     use std::str::FromStr;
     use tauri::State;
 
-    /// Starts audio capture via ScreenCaptureKit (interviewer) and Microphone (candidate)
+    /// Starts audio capture via ScreenCaptureKit (interviewer) and Microphone (candidate).
+    /// Async so the blocking ScreenCaptureKit start runs off the main thread.
     #[tauri::command]
-    pub fn start_audio_capture(
+    pub async fn start_audio_capture(
         app: AppHandle,
-        state: State<'_, AudioState>,
         config: Option<AudioCaptureConfig>,
     ) -> Result<(), String> {
-        state.start(&app, config.unwrap_or_default())
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<AudioState>().start(&app, config.unwrap_or_default())
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     /// Halts active audio capture pipelines
     #[tauri::command]
-    pub fn stop_audio_capture(
-        app: AppHandle,
-        state: State<'_, AudioState>,
-    ) -> Result<(), String> {
-        state.stop(&app)
+    pub async fn stop_audio_capture(app: AppHandle) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || app.state::<AudioState>().stop(&app))
+            .await
+            .map_err(|e| e.to_string())?
     }
 
     /// Retrieves atomic audio capture status snapshot

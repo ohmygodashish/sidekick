@@ -22,10 +22,10 @@ const SENIORITY: { id: SeniorityPreset; label: string }[] = [
 
 const optionClass = (selected: boolean) =>
   selected
-    ? "bg-sky-500/15 text-zinc-100 ring-1 ring-inset ring-sky-400/50"
-    : "bg-white/[0.04] text-zinc-300 hover:bg-white/[0.07]";
+    ? "bg-sk-accent-tint text-sk-fg"
+    : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover";
 
-const focusRing = "outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400/70";
+const focusRing = "outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus";
 
 export const ProfileEditor: React.FC = () => {
   const profile = useSettingsStore((s) => s.profile);
@@ -132,16 +132,16 @@ export const ProfileEditor: React.FC = () => {
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
           className={cn(
-            "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed border-white/15 px-3 py-4 text-center hover:bg-white/[0.04] focus-within:ring-2 focus-within:ring-sky-400/70",
-            dragging && "border-sky-400/60 bg-white/[0.04]"
+            "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed border-sk-line px-3 py-4 text-center hover:bg-sk-fill focus-within:ring-2 focus-within:ring-sk-focus",
+            dragging && "border-sk-focus bg-sk-accent-tint"
           )}
         >
           <input type="file" accept=".txt,.md" onChange={handleFileInput} className="sr-only" />
-          <span className="text-[13px] text-zinc-200">Drop a file here, or choose one</span>
+          <span className="text-[13px] text-sk-fg-2">Drop a file here, or choose one</span>
           <span className="sk-meta">.txt or .md, up to 200 KB</span>
         </label>
         {resumeError && (
-          <p role="alert" className="sk-meta text-red-300">
+          <p role="alert" className="sk-meta text-sk-danger">
             {resumeError}
           </p>
         )}
@@ -187,7 +187,7 @@ export const ProfileEditor: React.FC = () => {
         <div
           role="radiogroup"
           aria-label="Seniority"
-          className="grid grid-cols-5 gap-1 rounded-lg bg-white/[0.04] p-1"
+          className="grid grid-cols-5 gap-1 rounded-lg bg-sk-fill p-1"
         >
           {SENIORITY.map((level) => {
             const selected = profile.seniorityPreset === level.id;

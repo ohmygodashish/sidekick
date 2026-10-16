@@ -20,7 +20,7 @@
   - [3.1 Quick Start & First Launch](#31-quick-start--first-launch)
   - [3.2 The Hotkey Control System](#32-the-hotkey-control-system)
   - [3.3 The Control Bar & Answer Panel](#33-the-control-bar--answer-panel)
-  - [3.4 Real-Time Live Question Detection & Quick Pointers](#34-real-time-live-question-detection--quick-pointers)
+  - [3.4 Live Options](#34-live-options)
   - [3.5 Multi-Provider Deep Intelligence & Progressive Disclosure](#35-multi-provider-deep-intelligence--progressive-disclosure)
   - [3.6 Silent Problem Capture (Vision)](#36-silent-problem-capture-vision)
   - [3.7 API Key & Settings Storage](#37-api-key--settings-storage)
@@ -50,11 +50,11 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
 
 - **Invisible to Screen Sharing**: Never appears in Zoom, Google Meet, Microsoft Teams, Slack huddles, OBS Studio, Discord, or QuickTime Screen Recordings.
 - **Headless Phantom Operation**: No Dock tile, no Menu Bar icon, and excluded from `Cmd + Tab`. You summon it purely through muscle-memory hardware hotkeys.
-- **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu) with a single panel below it for answers or settings. Compact view hides the panel and leaves only the bar.
+- **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu). While a meeting is live, a caption and three live options sit under it, with one panel below for answers or settings. Clicks pass through everywhere except the visible pieces. Dark and light themes (Settings → Appearance). Compact view leaves only the bar.
 - **Driverless Dual-Channel Audio**: Simultaneously captures remote meeting audio via Apple's macOS 13+ `ScreenCaptureKit` and your microphone via CoreAudio—no virtual audio cables (BlackHole, Soundflower, Loopback) required.
 - **On-Device Metal AI or Cloud Fallback**: Runs 100% offline Metal GPU-accelerated `whisper.cpp` transcription, with one-click toggles for Deepgram Nova-2 and Groq Whisper.
-- **Live Question Detection (< 1s)**: Automatically detects when an interviewer concludes a question, strips filler pleasantries, and displays 3–4 punchy talking points in under 800ms.
-- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Gemini, or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups.
+- **Live Options**: While you talk, three numbered questions keep updating: the one the interviewer just asked (pinned in slot 1) and the ones they're likely to ask next. Press <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> or click one to get its answer.
+- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Gemini, Groq or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. Nothing is ever invented: a missing key, a provider error or a stalled stream shows a short error instead of an answer, and speech-to-text failures show in the caption instead of made-up words.
 - **Local Key Storage**: API keys and settings live in a local config file (`~/.config/sidekick/config.json`, readable only by your macOS user). Session data is held in an ephemeral SQLite database that is scrubbed on panic or single-click burn.
 
 ```
@@ -68,10 +68,10 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
      ┌───────────▼────────────┐    ┌────────────▼───────────┐    ┌─────────────▼───────────┐
      │   Stealth UI Layer     │    │   Audio & Vision Core  │    │  AI Intelligence Core   │
      │                        │    │                        │    │                         │
-     │ • NSWindowSharingNone  │    │ • ScreenCaptureKit SCK │    │ • Groq LPU Detector     │
+     │ • NSWindowSharingNone  │    │ • ScreenCaptureKit SCK │    │ • Groq live options     │
      │ • LSUIElement (No Dock)│    │ • CoreAudio Mic Input  │    │ • Multi-Provider Gateway│
-     │ • Control Bar & Panel  │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
-     │ • Compact View         │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
+     │ • Bar, Options & Panel │    │ • 1.1s VAD Chunker     │    │ • whisper.cpp (Metal)   │
+     │ • Click pass-through   │    │ • Silent CGWindowGrab  │    │ • Progressive 3-Stage   │
      └────────────────────────┘    └────────────────────────┘    └─────────────────────────┘
 ```
 
@@ -85,10 +85,10 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
 |:---:|:---|:---|
 | **1** | **Screen-Share Invisibility** | All overlay windows assign `NSWindow.sharingType = .none` (`NSWindowSharingNone`). Screen capture frameworks composite whatever is behind Sidekick with 0% pixel bleed. |
 | **2** | **Headless Phantom Operation** | Runs under `NSApplicationActivationPolicyAccessory` with `LSUIElement = true`. Zero Dock icon, zero Menu Bar tray, excluded from `Cmd + Tab`. Summoned exclusively via hotkeys. |
-| **3** | **Minimal Overlay UX** | One draggable control bar (Start/Stop meeting, Ask, Hide, menu) with a single answer or settings panel below it. Opacity 15%–100%, click-through, and a compact view that shows only the bar. |
+| **3** | **Minimal Overlay UX** | One draggable control bar (Start/Stop meeting, Ask, Hide, menu), a live caption and options while listening, and a single answer or settings panel. The window never resizes; Rust passes clicks through everywhere except the visible pieces. Opacity 15%–100%, click-through, dark/light themes, and a compact view that shows only the bar. |
 | **4** | **Driverless Dual-Audio** | Ingests pristine system audio via macOS 13+ `ScreenCaptureKit` and candidate voice via microphone into discrete Channel 0 (Interviewer) and Channel 1 (Candidate). Zero drivers needed. |
 | **5** | **Selectable STT** | Embedded Metal-accelerated `whisper.cpp` (`whisper-rs`) for 100% private offline transcription, with instant Cloud STT toggles (Deepgram Nova-2 / Groq Whisper). |
-| **6** | **Live Question Detection** | Real-time transcript evaluator extracts core questions and generates 3–4 instant talking points in < 1.0s (<100ms TTFT via Groq LPU / offline heuristic). |
+| **6** | **Live Options** | After every transcript turn, one fast Groq call (`qwen/qwen3.8-27b` by default, about 0.4 s) returns the question just asked and three likely next questions. Without a Groq key, a local heuristic still spots asked questions. |
 | **7** | **Multi-Provider Deep Engine** | Direct streaming integration for OpenRouter, Anthropic Direct, OpenAI Direct, and Google Gemini Direct with progressive disclosure rendering (Intuition $\rightarrow$ Code $\rightarrow$ Complexity). |
 | **8** | **Credential Security** | API keys and settings stored in a local JSON config file (`~/.config/sidekick/config.json`, mode `0600`). Ephemeral local SQLite database with instant < 25ms Panic killswitch and session burn. |
 
@@ -105,13 +105,13 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
    - Double-click `Sidekick.app`. 
    - **Notice**: No window opens immediately, and no icon bounces in the Dock or appears in the Menu Bar. This is intended phantom behavior.
 3. **Summon Sidekick**:
-   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top of the screen.
+   - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top-centre of the screen, just under the menu bar.
 4. **Configure Your API Keys**:
    - Press <kbd>Cmd</kbd> + <kbd>,</kbd> (or open the **⋯** menu and choose **Settings**).
-   - In the **Keys** tab, enter your provider keys (Groq for fast question detection, Anthropic/OpenAI/Gemini/OpenRouter for full answers).
+   - In the **Keys** tab, enter your provider keys: Groq for live options and fast transcription, and one of OpenRouter/Anthropic/OpenAI/Gemini (or Groq) for full answers. The answer model is chosen per provider; switching provider switches to that provider's default model.
    - Click **Save keys**. Keys are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
 5. **Start a Meeting**:
-   - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows a red stop square and the elapsed time.
+   - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows two level dots (sky = system audio, orange = microphone) and the elapsed time, and the caption and live options appear under the bar.
    - The first time, macOS asks for two permissions:
      - **Microphone**: your side of the conversation.
      - **Screen Recording**: required by macOS for `ScreenCaptureKit` audio capture and window capture.
@@ -131,8 +131,8 @@ Sidekick is operated completely through global hardware keyboard shortcuts that 
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> | **Toggle Click-Through** | Enables mouse click pass-through. Allows clicking into your IDE, terminal, or browser directly through the overlay. |
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> | **Toggle Compact View** | Hides the answer panel and leaves only the control bar. Press again to bring the panel back. |
 | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> | **Silent Window Vision** | Silently captures the problem description/diagram from the frontmost coding window without crosshairs or sounds. |
-| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings** | Opens the settings panel (Keys, Profile, Audio, Danger) under the bar. |
-| <kbd>Enter</kbd> or <kbd>Cmd</kbd> + <kbd>Enter</kbd> | **Ask** | Answers the detected question. Ignored while you type in a field or use a button or menu. With no question, the **Ask** button in the bar opens a box to type one. |
+| <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> | **Answer an option** | Answers live option 1, 2 or 3, with the recent conversation as context. Works while the meeting app has focus, and brings a hidden overlay back. |
+| <kbd>Cmd</kbd> + <kbd>,</kbd> | **Settings** | Opens the settings panel (Keys, Profile, Audio, Appearance, Danger) under the bar. Works while Sidekick has focus. |
 
 ---
 
@@ -144,12 +144,16 @@ Sidekick shows one control bar at the top of the screen and, when there is somet
 
 | Button | What it does |
 |:---|:---|
-| **Start / Stop** | Starts or stops listening to the meeting. While live it shows a red stop square and the elapsed time. Nothing is captured until you press **Start**. |
-| **Ask** (<kbd>Cmd</kbd> + <kbd>Enter</kbd>) | Answers the detected question. With no question, it opens a box where you can type one. |
+| **Start / Stop** | Starts or stops listening to the meeting. While live it shows two level dots (sky = system audio, orange = your microphone) and the elapsed time. Nothing is captured until you press **Start**. |
+| **Ask** | Opens a box where you can type a question. |
 | **Hide** (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>) | Hides the overlay. Press the shortcut again to bring it back. |
 | **⋯ menu** | Opacity (15%–100%), Compact view (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd>), Click-through (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd>), Settings (<kbd>Cmd</kbd> + <kbd>,</kbd>), and Panic (<kbd>Cmd</kbd> + <kbd>Esc</kbd>). |
 
-Drag the bar by its empty space to move the window.
+Drag the bar by its empty space to move the overlay. It appears top-centre under the menu bar on every launch. Clicks anywhere outside the bar, caption, options and panel reach the app underneath; with click-through on (amber outline and pill) they pass through everything.
+
+#### While listening
+- **Caption**: two lines, **System** and **Microphone**, each with the latest transcribed sentence. A transcription problem (missing key, rejected key, no local model) shows here as a third line.
+- **Live options**: see [3.4](#34-live-options).
 
 #### The panel
 - **Answer**: the question on one line, a short answer with key points, and expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. **✕** dismisses the answer and cancels it if it is still streaming.
@@ -158,31 +162,27 @@ Drag the bar by its empty space to move the window.
 
 ---
 
-### 3.4 Real-Time Live Question Detection & Quick Pointers
+### 3.4 Live Options
 
-During an interview, you don't always need full code—often, you need immediate verbal talking points within 1–2 seconds to begin answering smoothly.
+While a meeting is live, a card under the caption shows three numbered questions:
 
-1. **How it works**:
-   - While a meeting is live, Channel 0 listens to incoming meeting audio via `ScreenCaptureKit`. Only this interviewer channel is checked for questions; your own speech never replaces the question.
-   - Energy-based Voice Activity Detection (VAD) monitors speech turns. When the interviewer concludes an inquiry (1.1s silence detected), the turn buffer is dispatched.
-   - The evaluator model (Groq LPU `llama-3.3-70b-versatile` or offline heuristic) strips conversational noise ("Um", "Yeah so basically", "Can you explain how...").
-2. **What appears**:
-   - The distilled, core technical question appears at the top of the answer panel.
-   - **3–4 high-impact talking points / architectural keywords** appear below it. Press <kbd>Cmd</kbd> + <kbd>Enter</kbd> for a full answer.
-   - Example:
-     > **Interviewer**: *"Um, so I noticed your background with microservices. How would you handle distributed transactions across orders and payments?"*  
-     > **Answer panel**:  
-     > 🎯 *How to handle distributed transactions across orders and payments?*  
-     > • **Two-Phase Commit (2PC)**: Strong consistency, blocking coordinator, single point of failure.  
-     > • **Saga Pattern**: Choreography (event-driven) vs. Orchestration (central state machine).  
-     > • **Compensating Transactions**: Semantic rollbacks for backward recovery.  
-     > • **Outbox Pattern**: Atomic DB updates with Debezium/Kafka CDC to eliminate dual-write hazards.
+- **Before any question is asked**, all three are questions the interviewer is likely to ask next on the current topic. They update after every turn.
+- **When the interviewer asks a question**, it takes slot 1, marked **Asked**, restated as one clear question. It stays pinned there until the next question is asked; slots 2 and 3 keep rolling.
+- **To answer one**, click it or press <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd>. The answer streams into the panel below, with the recent conversation as context. The picked option stays highlighted. Nothing is answered automatically.
+
+How it works:
+1. System audio (the interviewer) and your microphone are split into turns by voice activity detection (a turn ends after 1.1 s of silence, or at 15 s).
+2. Each turn is transcribed (Groq Whisper, Deepgram, or the local model) and shown in the caption.
+3. After every turn, one Groq request sends the last 12 turns and gets back `{ "asked": …, "likely": [ … ] }`. One request runs at a time; turns that arrive meanwhile trigger one rerun with the latest transcript.
+4. Without a Groq key, a local heuristic still spots asked questions in the interviewer's turns, but there are no predictions.
+
+Example, from a test against Groq: after *"Say you have a bunch of build targets that depend on each other, how would you figure out if there's a circular dependency?"*, slot 1 became *"How would you determine if a set of build targets with dependencies contains a circular dependency?"*, with *"What is the time complexity of your solution?"* and *"How would you handle a very large graph?"* below it.
 
 ---
 
 ### 3.5 Multi-Provider Deep Intelligence & Progressive Disclosure
 
-For a full answer, press <kbd>Cmd</kbd> + <kbd>Enter</kbd> (or <kbd>Enter</kbd>) or click **Ask** in the bar. You can also type a question or follow-up in the box at the bottom of the panel.
+For a full answer, pick a live option (click, or <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>), or click **Ask** and type a question. The box at the bottom of the panel takes follow-ups.
 
 The answer streams into one panel:
 
@@ -252,7 +252,7 @@ The file looks like this:
 ```json
 {
   "apiKeys": { "openrouter": "sk-or-…", "groq": "gsk_…" },
-  "settings": { "state": { "selectedProvider": "openrouter", "…": "…" }, "version": 0 }
+  "settings": { "state": { "selectedProvider": "openrouter", "theme": "system", "…": "…" }, "version": 1 }
 }
 ```
 
@@ -332,7 +332,7 @@ Inside Settings (`Cmd + ,` $\rightarrow$ **Danger**):
 > **A**: No. On macOS 13+, Sidekick uses Apple's native `ScreenCaptureKit` API to stream digital audio directly from running applications without kernel extensions or virtual audio devices.
 
 #### Q: Can I run Sidekick completely offline?
-> **A**: Speech-to-text can. In Settings $\rightarrow$ **Audio**, select **On this Mac** and click **Download model** (the tiny English model, about 75 MB). Transcription then runs locally on your Mac. Question detection falls back to an offline heuristic when no Groq key is set, but full answers always need a cloud model provider.
+> **A**: Speech-to-text can. In Settings $\rightarrow$ **Audio**, select **On this Mac** and click **Download model** (the tiny English model, about 75 MB). Transcription then runs locally on your Mac. Without a Groq key, live options fall back to a local heuristic that spots asked questions but can't predict the next ones, and full answers always need a cloud model provider.
 
 ---
 
@@ -353,7 +353,7 @@ Sidekick is built on **Tauri v2** using a hybrid architecture:
 │                   │                                │                   │
 │   ┌───────────────┴────────────────┐   ┌───────────▼───────────────┐   │
 │   │          Hooks Layer           │   │         UI Layer          │   │
-│   │   • useQuestionDetector.ts     │   │   • HUDContainer.tsx      │   │
+│   │   • useLiveOptions.ts          │   │   • HUDContainer.tsx      │   │
 │   │   • useDeepSolver.ts           │   │   • ControlBar.tsx        │   │
 │   │                                │   │   • AnswerPanel.tsx       │   │
 │   └───────────────▲────────────────┘   │   • SettingsDrawer.tsx    │   │
@@ -362,7 +362,7 @@ Sidekick is built on **Tauri v2** using a hybrid architecture:
 │   │       Services / AI Layer      │                                   │
 │   │   • dispatcher.ts (Multi-LLM)  │                                   │
 │   │   • streamParser.ts (XML/SSE)  │                                   │
-│   │   • questionDetector.ts (Groq) │                                   │
+│   │   • liveOptions.ts (Groq)      │                                   │
 │   └───────────────▲────────────────┘                                   │
 │                   │                                                    │
 ├───────────────────┼────────────────────────────────────────────────────┤
@@ -405,14 +405,14 @@ sidekick/
 │   ├── components/
 │   │   ├── answer/                 # AnswerPanel (question, answer, follow-up box)
 │   │   ├── cards/                  # ProgressiveCard, CodeBlock
-│   │   ├── hud/                    # HUDContainer, ControlBar, BarMenu, OpacityControl
+│   │   ├── hud/                    # HUDContainer, ControlBar, BarMenu, OpacityControl, CaptionLine, LiveOptions
 │   │   └── settings/               # SettingsDrawer, ApiKeyInputs, ProfileEditor
-│   ├── hooks/                      # useDeepSolver, useQuestionDetector
+│   ├── hooks/                      # useDeepSolver, useLiveOptions, useHitRegions, usePresence, useTheme
 │   ├── lib/                        # Typed IPC bindings (ipc.ts) and classname utils (utils.ts)
 │   ├── services/ai/                # LLM clients (Anthropic, OpenAI, Gemini, OpenRouter, Groq)
 │   ├── store/                      # Zustand stores (appStore, sessionStore, settingsStore)
 │   ├── App.tsx                     # Top-level shell: hooks, event listeners, and the HUD
-│   ├── index.css                   # Tailwind setup and the shared sk-* UI tokens
+│   ├── index.css                   # Theme tokens (dark and light), sk-* component classes, motion
 │   └── main.tsx                    # React DOM entry point
 └── src-tauri/                      # Rust 2021 Backend
     ├── capabilities/               # Tauri v2 permission definitions (default.json)
@@ -437,7 +437,8 @@ sidekick/
     │   │   ├── mod.rs
     │   │   └── window_grab.rs      # CGWindowListCopyWindowInfo and in-memory PNG encoder
     │   ├── hotkeys/                # Global hardware shortcuts dispatcher
-    │   │   └── mod.rs              # Panic, visibility, layout, and capture shortcuts
+    │   │   └── mod.rs              # Panic, visibility, layout, capture, and Cmd+Option+1/2/3 option shortcuts
+    │   ├── hit_region.rs           # Cursor poller: click pass-through everywhere except the UI
     │   ├── storage/                # Security and persistence
     │   │   ├── mod.rs
     │   │   ├── config.rs           # API keys and settings in ~/.config/sidekick/config.json
@@ -471,6 +472,10 @@ sidekick/
   - `NSWindowSharingNone` (0): Completely excludes the window from all OS display capture APIs (`CGDisplayStream`, `ScreenCaptureKit`, QuickTime, and Zoom capture hooks).
   - `NSFloatingWindowLevel` (3): Floats above normal IDE and browser windows.
   - `NSWindowCollectionBehaviorFullScreenAuxiliary`: Ensures the window remains visible even when your IDE or conference call is in macOS Native Fullscreen spaces.
+
+#### Click Pass-Through Around the UI (`hit_region.rs`)
+- **Location**: [`src-tauri/src/hit_region.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/hit_region.rs), [`src/hooks/useHitRegions.ts`](file:///Users/ashish/Developer/sidekick/src/hooks/useHitRegions.ts)
+- **Mechanism**: The overlay is one fixed transparent window (600 pt wide, the screen's work-area height, top-centre) that never resizes, because resizing a WKWebView repaints the page and makes the UI blink. The frontend reports the rects of every visible surface (`.sk-bar`, `.sk-panel`, `.sk-menu`, `.sk-surface`) with `set_hit_regions`, re-measuring on resize, mount and animation end. A Rust thread polls the cursor every 16 ms and calls `set_ignore_cursor_events` only when the answer changes, so the window takes the mouse only over the UI. Click-through mode (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd>) forces pass-through everywhere.
 
 #### Driverless Audio Ingestion (`ScreenCaptureKit` + CoreAudio)
 - **Location**: [`src-tauri/src/audio/sck_audio_bridge.m`](file:///Users/ashish/Developer/sidekick/src-tauri/src/audio/sck_audio_bridge.m), [`src-tauri/src/audio/mixer.rs`](file:///Users/ashish/Developer/sidekick/src-tauri/src/audio/mixer.rs)
@@ -541,13 +546,14 @@ sidekick/
 
 | Command Signature | Description |
 |:---|:---|
-| `set_click_through(enabled: bool) -> Result<(), String>` | Toggles mouse event pass-through on the native window. |
+| `set_click_through(enabled: bool) -> Result<(), String>` | Turns click-through mode on or off; the hit-region poller applies it within 16 ms. |
+| `set_hit_regions(rects: Vec<[f64; 4]>)` | Reports the visible UI as `[x, y, width, height]` rects in window points. The window takes the mouse only over these. |
 | `set_window_opacity(alpha: f64) -> Result<(), String>` | Updates native `NSWindow.alphaValue` (clamped 0.15 to 1.0). |
 | `set_layout_mode(mode: String) -> Result<(), String>` | Saves the layout: `"floating_hud"` (bar and panel) or `"dynamic_notch"` (compact view, bar only). |
 | `trigger_panic() -> Result<(), String>` | Synchronously hides all windows, aborts network, and flushes audio buffers (< 25ms). |
 | `capture_active_window() -> Result<WindowCaptureResponse, String>` | Silently captures frontmost active window and returns Base64 PNG. |
-| `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Starts dual-channel `ScreenCaptureKit` and microphone capture. Called only when the user clicks **Start**. |
-| `stop_audio_capture() -> Result<(), String>` | Stops audio capture streams. Called when the user clicks **Stop**. |
+| `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Async; starts dual-channel `ScreenCaptureKit` and microphone capture off the main thread. Called only when the user clicks **Start**; a second call while capturing is a no-op. |
+| `stop_audio_capture() -> Result<(), String>` | Async; stops both streams off the main thread and emits a final zero `audio_level`. Called when the user clicks **Stop**. |
 | `set_stt_engine(engine: String) -> Result<(), String>` | Switches STT engine (`"whisper_local"`, `"groq"`, `"deepgram"`). |
 | `download_stt_model(model_name: String) -> Result<(), String>` | Streams GGML weights from Hugging Face repository into local models dir. |
 | `store_api_key(provider: String, key: String) -> Result<(), String>` | Saves or updates an API key in `config.json`. An empty key deletes it. `provider` must be 1–32 characters of `a-z`, `0-9`, `_` or `-`. |
@@ -565,7 +571,10 @@ sidekick/
 | `sidekick://click_through_toggled`| `{"click_through": bool}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd> toggles pass-through. |
 | `sidekick://toggle_layout_mode` | `{"layout_mode": String}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> toggles compact view. |
 | `sidekick://active_window_captured`| `WindowCaptureResponse` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> captures a window. |
-| `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. |
+| `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. Never carries invented text. |
+| `sidekick://stt_error` | `{"message": String, "engine": "groq"\|"deepgram"\|"whisper_local", "recovered": bool, "timestamp": u64}` | Emitted when a turn couldn't be transcribed, or (`recovered: true`) when a cloud failure was covered by the local model. The same message is sent at most once per 10 s. Shown in the caption. |
+| `sidekick://audio_level` | `{"interviewer": f32, "candidate": f32}` | Live level per source, 0–1, at most every 100 ms while capturing. Drives the level dots. |
+| `sidekick://pick_option` | `{"index": 0\|1\|2}` | Emitted by <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>; the frontend answers that live option. |
 | `sidekick://session_burned` | `{"burned": true, "timestamp": u64}` | Emitted when session database and memory buffers are purged. |
 
 ---
@@ -607,7 +616,13 @@ npm run dev
 
 # 5. Run full Tauri desktop application in development mode
 npm run tauri -- dev
+
+# Debug builds only: skip screen-share hiding and show the window at launch,
+# so the UI can be screenshotted and tested
+SIDEKICK_DEV_VISIBLE=1 npm run tauri -- dev
 ```
+
+After changing `tailwind.config.js` (for example adding a theme token), restart the dev server; the running one keeps the old config.
 
 ---
 
@@ -617,7 +632,8 @@ Sidekick enforces strict test automation across both Rust and React layers.
 
 #### Running the Full Test Suite
 ```bash
-# Run all Rust backend unit and integration tests (safe: they only use temp directories):
+# Run all Rust backend unit and integration tests (safe: they only write to temp directories;
+# some read a local Whisper model if one is installed):
 cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run all React Vitest frontend unit tests:
@@ -685,7 +701,7 @@ All developers and contributors must adhere to these non-negotiable invariants:
 | **Idle Memory Footprint** | `< 45 MB` | Webview optimizations, lazy model loading, release profile LTO. |
 | **Active Meeting CPU Utilization** | `< 6%` | Apple Silicon hardware Metal acceleration, 2x2 SCK footprint. |
 | **Panic Reaction Speed** | `< 25 ms` | Synchronous AppKit `hide()`, non-blocking worker thread drops. |
-| **Question Extraction Latency** | `< 1.0 s` | Groq LPU sub-100ms TTFT + 1.1s VAD silence window. |
+| **Live Options Latency** | `≈ 1 s after a turn ends` | 1.1 s VAD silence ends the turn, then transcription, then one Groq call (≈ 0.4 s measured). One request in flight at a time. |
 | **Zero Raw Audio Files** | `0 bytes` | In-memory volatile PCM buffers only. No audio writes to disk. |
 | **Zero Telemetry** | `0 packets` | No analytics, crash reporters, or external tracking services. |
 | **Local Key Storage** | `config.json` (`0600`) | All third-party API keys stored in `~/.config/sidekick/config.json`. Plain text on disk, protected by file permissions and FileVault. |

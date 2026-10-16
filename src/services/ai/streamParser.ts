@@ -351,7 +351,8 @@ export function parseProgressiveStream(
 export async function readSSEStream(
   response: Response,
   onLine: (line: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onActivity?: () => void
 ): Promise<void> {
   if (!response.body) {
     throw new Error("HTTP response has no readable body stream.");
@@ -370,6 +371,7 @@ export async function readSSEStream(
 
       const { done, value } = await reader.read();
       if (done) break;
+      onActivity?.();
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");

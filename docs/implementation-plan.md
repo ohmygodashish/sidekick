@@ -141,6 +141,8 @@ flowchart TD
 ### Phase 2: Dual UI Engine (React 19 + Tailwind CSS)
 
 > **Superseded (2026-10-16):** The dual HUD / Dynamic Notch UI below was replaced by one Cluely-style layout: a draggable control bar (`ControlBar`, `BarMenu`) with Start/Stop meeting, Ask, Hide and a menu (opacity, compact view, click-through, settings, panic), and one panel slot that shows either the answer (`AnswerPanel` with `ProgressiveCard` and `CodeBlock`) or settings. `NotchCompanion`, `LayoutSwitcher`, `QuestionBanner` and `ComplexityBadge` were removed; the `dynamic_notch` layout value now means compact view (bar only). Audio capture starts only when the user presses Start (spec REQ-018). Shared styles live as `sk-*` tokens in `src/index.css` (spec GUD-001).
+>
+> **Superseded again (2026-10-16, usability overhaul, see [`overhaul-plan.md`](overhaul-plan.md)):** the window is one fixed transparent window at the top-centre that never resizes; `hit_region.rs` passes clicks through everywhere except the visible UI (spec REQ-005, REQ-006). While a meeting is live, a two-line caption (`CaptionLine`) and three numbered live options (`LiveOptions`) sit under the bar. Colours are theme tokens with dark and light values, chosen in Settings → Appearance (REQ-020), and motion follows GUD-002 (`sk-pop`, `sk-fade`, `usePresence`). The glassmorphism blur and the zinc classes in Task 4 no longer apply.
 
 #### Task 4: State Store & Glassmorphism Shell Architecture
 * **User Story**: As a user, I want a sleek, modern glassmorphism overlay with an opacity slider and draggable positioning.
@@ -293,6 +295,7 @@ flowchart TD
 ### Phase 4: AI Pipelines & Live Question Detection
 
 #### Task 11: Real-Time Question Extractor & Quick Pointers Engine
+> **Superseded (2026-10-16):** quick pointers, `useQuestionDetector`, `detectQuestion` and the in-window `Enter` / `Cmd + Enter` shortcut were removed. Live options replace them: `src/services/ai/liveOptions.ts` sends the last 12 turns to Groq (`qwen/qwen3.8-27b`) after every turn and gets back the asked question and three likely next questions; `src/hooks/useLiveOptions.ts` keeps one request in flight and pins the asked question; `Cmd + Option + 1/2/3` (global, `hotkeys/mod.rs`) or a click answers one (spec REQ-011, REQ-012). `questionDetector.ts` keeps only the local heuristics used without a Groq key.
 * **User Story**: As an interviewee, I want Sidekick to detect when the interviewer asks a question, filter out filler words, and instantly show 3-4 bullet points on what to say.
 * **Spec Alignment**: Fulfills `REQ-011`, `REQ-012`, `AC-004`, `NFR-1`.
 * **Implementation Details**:
@@ -317,6 +320,7 @@ flowchart TD
 ---
 
 #### Task 12: Multi-Provider Deep Intelligence Gateway
+> **Superseded (2026-10-16):** the model ids below are out of date; defaults are now `anthropic/claude-haiku-5.5` (OpenRouter), `claude-haiku-5-5` (Anthropic), `gpt-5.6-luna` (OpenAI), `gemini-3.8-flash` (Gemini) and `openai/gpt-oss-120b` (Groq). The canned mock answer and its fallback were removed: a missing key, provider error, 25 s stall or empty answer is shown as a short error (spec REQ-014, audit A1–A4).
 * **User Story**: As a user, I want to use my choice of Claude 3.5 Sonnet, GPT-4o, Gemini 2.0 Pro, or OpenRouter for deep coding and system design with progressive disclosure.
 * **Spec Alignment**: Fulfills `REQ-014`, `REQ-015`.
 * **Implementation Details**:

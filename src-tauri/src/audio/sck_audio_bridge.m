@@ -141,10 +141,11 @@
 
 @end
 
+// Objects are held as +1 CFTypeRefs (CFBridgingRetain). ARC cannot manage object pointers in malloc'd memory.
 struct SCKAudioBridgeHandle {
-    SCStream *stream;
-    SCKAudioReceiver *receiver;
-    dispatch_queue_t queue;
+    CFTypeRef stream;
+    CFTypeRef receiver;
+    CFTypeRef queue;
     BOOL isRunning;
 };
 
@@ -238,7 +239,11 @@ SCKAudioBridgeHandle *sck_audio_start(
     intptr_t startWait = dispatch_semaphore_wait(startSema, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
     if (startWait != 0 || startError != nil) {
         copy_error(err_buf, err_buf_len, startError ? [[startError localizedDescription] UTF8String] : "Timeout starting ScreenCaptureKit audio stream");
+        // A start that only timed out may still come up; stop it so it doesn't run with no consumer
+        [stream stopCaptureWithCompletionHandler:nil];
         [stream removeStreamOutput:receiver type:SCStreamOutputTypeAudio error:nil];
+        // Rust frees the callback context when we return NULL; let queued sample blocks finish first
+        dispatch_sync(audioQueue, ^{});
         return NULL;
     }
 
@@ -246,12 +251,14 @@ SCKAudioBridgeHandle *sck_audio_start(
     if (!handle) {
         copy_error(err_buf, err_buf_len, "Out of memory allocating SCKAudioBridgeHandle");
         [stream stopCaptureWithCompletionHandler:nil];
+        [stream removeStreamOutput:receiver type:SCStreamOutputTypeAudio error:nil];
+        dispatch_sync(audioQueue, ^{});
         return NULL;
     }
 
-    handle->stream = stream;
-    handle->receiver = receiver;
-    handle->queue = audioQueue;
+    handle->stream = CFBridgingRetain(stream);
+    handle->receiver = CFBridgingRetain(receiver);
+    handle->queue = CFBridgingRetain(audioQueue);
     handle->isRunning = YES;
 
     return handle;
@@ -264,34 +271,32 @@ void sck_audio_stop(SCKAudioBridgeHandle *handle) {
 
     handle->isRunning = NO;
 
-    // 1. Immediately nullify receiver callback and context so any in-flight frames are dropped
-    if (handle->receiver) {
-        handle->receiver.callback = NULL;
-        handle->receiver.context = NULL;
-    }
+    SCStream *stream = (__bridge SCStream *)handle->stream;
+    SCKAudioReceiver *receiver = (__bridge SCKAudioReceiver *)handle->receiver;
+    dispatch_queue_t queue = (__bridge dispatch_queue_t)handle->queue;
 
-    // 2. Stop capture stream with low latency (<25ms timeout for panic purge compliance)
-    if (handle->stream) {
-        if (handle->receiver) {
-            [handle->stream removeStreamOutput:handle->receiver type:SCStreamOutputTypeAudio error:nil];
-        }
-        dispatch_semaphore_t stopSema = dispatch_semaphore_create(0);
-        [handle->stream stopCaptureWithCompletionHandler:^(NSError * _Nullable error) {
-            (void)error;
-            dispatch_semaphore_signal(stopSema);
-        }];
-        // Wait up to 20ms (< 25ms) for graceful stop, never blocking emergency panic purge
-        dispatch_semaphore_wait(stopSema, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC));
-        handle->stream = nil;
-    }
+    // 1. Stop capture and wait (bounded) for SCK to confirm, then detach the output so no new buffers arrive
+    dispatch_semaphore_t stopSema = dispatch_semaphore_create(0);
+    [stream stopCaptureWithCompletionHandler:^(NSError * _Nullable error) {
+        (void)error;
+        dispatch_semaphore_signal(stopSema);
+    }];
+    dispatch_semaphore_wait(stopSema, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+    [stream removeStreamOutput:receiver type:SCStreamOutputTypeAudio error:nil];
 
-    // 3. Drain and flush any pending blocks on the audio dispatch queue before releasing resources
-    if (handle->queue) {
-        dispatch_sync(handle->queue, ^{});
-    }
+    // 2. Drain buffers already queued on the sample-handler queue, so none is still inside the callback
+    dispatch_sync(queue, ^{});
 
-    handle->receiver = nil;
-    handle->queue = nil;
+    // 3. Only now clear the callback. The context belongs to Rust and is freed after this returns.
+    receiver.callback = NULL;
+    receiver.context = NULL;
+
+    CFBridgingRelease(handle->stream);
+    CFBridgingRelease(handle->receiver);
+    CFBridgingRelease(handle->queue);
+    handle->stream = NULL;
+    handle->receiver = NULL;
+    handle->queue = NULL;
 
     free(handle);
 }

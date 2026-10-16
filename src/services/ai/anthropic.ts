@@ -1,11 +1,12 @@
 import { readSSEStream } from "./streamParser";
+import { assertOk } from "./errors";
 import { cleanBase64Data, ProviderStreamRequest } from "./openrouter";
 
 /**
  * Builds Anthropic Messages API payload with image content block.
  */
 export function buildAnthropicPayload(request: ProviderStreamRequest) {
-  let model = request.model || "claude-3-5-sonnet-20241022";
+  let model = request.model || "claude-haiku-5-5";
   // If model was prefixed with "anthropic/", strip it
   if (model.startsWith("anthropic/")) {
     model = model.slice("anthropic/".length);
@@ -79,12 +80,7 @@ export async function streamAnthropic(
     signal: request.signal,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Anthropic HTTP ${response.status} ${response.statusText}: ${errorBody}`
-    );
-  }
+  await assertOk(response);
 
   let accumulated = "";
 
@@ -107,7 +103,8 @@ export async function streamAnthropic(
         // Partial or malformed SSE line, ignore
       }
     },
-    request.signal
+    request.signal,
+    request.onActivity
   );
 
   return accumulated;

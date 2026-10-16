@@ -3,15 +3,23 @@ import {
   AudioLines,
   KeyRound,
   LoaderCircle,
+  Monitor,
+  Moon,
+  SunMoon,
+  Sun,
   TriangleAlert,
   User,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useSettingsStore, type SttMode } from "../../store/settingsStore";
+import {
+  useSettingsStore,
+  type SttMode,
+  type ThemePreference,
+} from "../../store/settingsStore";
 import { useSessionStore } from "../../store/sessionStore";
 import {
-  safeInvoke,
+  invokeInTauri,
   listLocalSttModels,
   downloadSttModel,
   type ModelAssetInfo,
@@ -20,7 +28,7 @@ import { ApiKeyInputs } from "./ApiKeyInputs";
 import { ProfileEditor } from "./ProfileEditor";
 import { cn } from "../../lib/utils";
 
-export type SettingsTab = "keys" | "profile" | "audio" | "danger";
+export type SettingsTab = "keys" | "profile" | "audio" | "appearance" | "danger";
 
 interface SettingsDrawerProps {
   isOpen?: boolean;
@@ -32,7 +40,14 @@ const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "keys", label: "Keys", icon: KeyRound },
   { id: "profile", label: "Profile", icon: User },
   { id: "audio", label: "Audio", icon: AudioLines },
+  { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "danger", label: "Danger", icon: TriangleAlert },
+];
+
+const THEMES: { id: ThemePreference; label: string; icon: LucideIcon }[] = [
+  { id: "system", label: "System", icon: Monitor },
+  { id: "light", label: "Light", icon: Sun },
+  { id: "dark", label: "Dark", icon: Moon },
 ];
 
 const STT_OPTIONS: { id: SttMode; name: string; description: string }[] = [
@@ -57,6 +72,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const sttMode = useSettingsStore((s) => s.sttMode);
   const setSttMode = useSettingsStore((s) => s.setSttMode);
   const apiKeys = useSettingsStore((s) => s.apiKeys);
+  const theme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
   const clearSession = useSessionStore((s) => s.clearSession);
 
   const isOpen = propsIsOpen !== undefined ? propsIsOpen : storeIsOpen;
@@ -64,6 +81,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab);
   const tabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
+  const themeRefs = useRef<Partial<Record<ThemePreference, HTMLButtonElement | null>>>({});
 
   const [localModels, setLocalModels] = useState<ModelAssetInfo[]>([]);
   const [downloading, setDownloading] = useState(false);
@@ -71,6 +89,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const [armed, setArmed] = useState<DangerAction | null>(null);
   const [done, setDone] = useState<DangerAction | null>(null);
+  const [burnFailed, setBurnFailed] = useState(false);
   const armTimer = useRef<number | undefined>(undefined);
   const doneTimer = useRef<number | undefined>(undefined);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -151,7 +170,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setArmed(null);
     if (action === "burn") {
       clearSession();
-      await safeInvoke("burn_session");
+      try {
+        await invokeInTauri("burn_session");
+      } catch (err) {
+        console.warn("[Sidekick] burn_session failed:", err);
+        setBurnFailed(true);
+        return;
+      }
+      setBurnFailed(false);
     } else {
       resetSettings();
     }
@@ -170,12 +196,24 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     tabRefs.current[next]?.focus();
   };
 
+  // Arrow keys move the selection as well as focus, so the theme applies as you move
+  const onThemeKeyDown = (e: React.KeyboardEvent) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const index = THEMES.findIndex((t) => t.id === theme);
+    const next = THEMES[(index + step + THEMES.length) % THEMES.length].id;
+    setTheme(next);
+    themeRefs.current[next]?.focus();
+  };
+
   return (
     <section
       role="dialog"
       aria-label="Settings"
       data-testid="settings-drawer"
-      className="sk-panel min-h-0 max-h-full"
+      className="sk-panel sk-pop min-h-0"
     >
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
         <h2 className="sk-title flex-1">Settings</h2>
@@ -194,7 +232,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         role="tablist"
         aria-label="Settings sections"
         onKeyDown={onTabKeyDown}
-        className="mx-3 grid grid-cols-4 gap-1 rounded-lg bg-white/[0.04] p-1"
+        className="mx-3 grid grid-cols-5 gap-1 rounded-lg bg-sk-fill p-1"
       >
         {TABS.map(({ id, label, icon: Icon }) => {
           const selected = id === activeTab;
@@ -212,8 +250,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               tabIndex={selected ? 0 : -1}
               onClick={() => setActiveTab(id)}
               className={cn(
-                "flex h-7 items-center justify-center gap-1.5 rounded text-[12px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400/70",
-                selected ? "bg-white/10 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+                "flex h-7 items-center justify-center gap-1.5 rounded text-[12px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
+                selected ? "bg-sk-hover text-sk-fg" : "text-sk-fg-3 hover:text-sk-fg-2"
               )}
             >
               <Icon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -248,10 +286,10 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                       aria-checked={selected}
                       onClick={() => setSttMode(opt.id)}
                       className={cn(
-                        "flex w-full flex-col items-start gap-0.5 rounded-lg p-3 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sky-400/70",
+                        "flex w-full flex-col items-start gap-0.5 rounded-lg p-3 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
                         selected
-                          ? "bg-sky-500/15 text-zinc-100 ring-1 ring-inset ring-sky-400/50"
-                          : "bg-white/[0.04] text-zinc-300 hover:bg-white/[0.07]"
+                          ? "bg-sk-accent-tint text-sk-fg"
+                          : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover"
                       )}
                     >
                       <span className="text-[13px] font-medium">{opt.name}</span>
@@ -268,9 +306,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             </div>
 
             {sttMode === "whisper_local" && (
-              <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
+              <div className="space-y-2 rounded-lg bg-sk-fill p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] font-medium text-zinc-100">
+                  <span className="text-[13px] font-medium text-sk-fg">
                     Local speech model (tiny, about 75 MB)
                   </span>
                   <span className="sk-meta">{modelReady ? "Downloaded" : "Not downloaded"}</span>
@@ -292,7 +330,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   {modelNotice && (
                     <span
                       role="status"
-                      className={cn("sk-meta", modelNotice.ok ? "text-emerald-400" : "text-red-300")}
+                      className={cn("sk-meta", modelNotice.ok ? "text-sk-success" : "text-sk-danger")}
                     >
                       {modelNotice.text}
                     </span>
@@ -305,12 +343,49 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           </div>
         )}
 
+        {activeTab === "appearance" && (
+          <div className="space-y-2">
+            <h3 className="sk-label">Theme</h3>
+            <div
+              role="radiogroup"
+              aria-label="Theme"
+              onKeyDown={onThemeKeyDown}
+              className="grid grid-cols-3 gap-1 rounded-lg bg-sk-fill p-1"
+            >
+              {THEMES.map(({ id, label, icon: Icon }) => {
+                const selected = theme === id;
+                return (
+                  <button
+                    key={id}
+                    ref={(el) => {
+                      themeRefs.current[id] = el;
+                    }}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => setTheme(id)}
+                    className={cn(
+                      "flex h-8 items-center justify-center gap-1.5 rounded text-[13px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
+                      selected ? "bg-sk-accent-tint text-sk-fg" : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="sk-meta">System follows your macOS appearance.</p>
+          </div>
+        )}
+
         {activeTab === "danger" && (
           <div className="space-y-2">
             <p className="sk-meta">These can&apos;t be undone.</p>
 
-            <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
-              <h3 className="text-[13px] font-medium text-zinc-100">Burn session</h3>
+            <div className="space-y-2 rounded-lg bg-sk-fill p-3">
+              <h3 className="text-[13px] font-medium text-sk-fg">Burn session</h3>
               <p className="sk-meta">
                 Clears transcripts, questions and answers, and stops listening.
               </p>
@@ -319,24 +394,29 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   {armed === "burn" ? "Click again to burn" : "Burn"}
                 </button>
                 {done === "burn" && (
-                  <span role="status" className="sk-meta text-emerald-400">
+                  <span role="status" className="sk-meta text-sk-success">
                     Session cleared
+                  </span>
+                )}
+                {burnFailed && (
+                  <span role="status" className="sk-meta text-sk-danger">
+                    Couldn&apos;t clear the session in the backend. Try again.
                   </span>
                 )}
               </div>
             </div>
 
-            <div className="space-y-2 rounded-lg bg-white/[0.04] p-3">
-              <h3 className="text-[13px] font-medium text-zinc-100">Reset settings</h3>
+            <div className="space-y-2 rounded-lg bg-sk-fill p-3">
+              <h3 className="text-[13px] font-medium text-sk-fg">Reset settings</h3>
               <p className="sk-meta">
-                Restores models, persona and speech settings to their defaults.
+                Restores models, persona, speech and theme settings to their defaults.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <button type="button" onClick={() => runDanger("reset")} className="sk-btn-secondary">
                   {armed === "reset" ? "Click again to reset" : "Reset"}
                 </button>
                 {done === "reset" && (
-                  <span role="status" className="sk-meta text-emerald-400">
+                  <span role="status" className="sk-meta text-sk-success">
                     Settings reset
                   </span>
                 )}

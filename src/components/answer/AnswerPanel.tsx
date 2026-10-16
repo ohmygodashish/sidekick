@@ -4,8 +4,6 @@ import { useSessionStore, DetectedQuestion } from "../../store/sessionStore";
 import { useAppStore } from "../../store/appStore";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
 
-const isString = (x: unknown): x is string => typeof x === "string";
-
 const dispatchSolve = (question: DetectedQuestion) =>
   window.dispatchEvent(new CustomEvent("sidekick:deep_solve", { detail: question }));
 
@@ -30,13 +28,12 @@ export const AnswerPanel: React.FC = () => {
   if (!activeQuestion && !hasSolution && !isSolving && !solveError && !isAskOpen) return null;
 
   const question = activeQuestion ? activeQuestion.extractedQuestion || activeQuestion.rawTranscript : "";
-  const pointers = (activeQuestion?.quickPointers ?? []).filter(isString).slice(0, 4);
 
   const close = () => {
     window.dispatchEvent(new Event("sidekick:cancel_solve"));
     useSessionStore.getState().setActiveQuestion(null);
     useSessionStore.getState().setSolution(null);
-    useSessionStore.setState({ solveError: null });
+    useSessionStore.setState({ solveError: null, pickedOption: null });
     setAskOpen(false);
   };
 
@@ -62,7 +59,7 @@ export const AnswerPanel: React.FC = () => {
     body = (
       <div
         role="alert"
-        className="flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-[13px] text-red-300"
+        className="sk-fade flex items-start gap-2 rounded-lg bg-sk-danger-tint px-3 py-2 text-[13px] text-sk-danger"
       >
         <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1">{solveError}</span>
@@ -82,30 +79,17 @@ export const AnswerPanel: React.FC = () => {
       <>
         {hasSolution && <ProgressiveCard />}
         {isSolving && (
-          <p className="flex items-center gap-2 sk-meta">
+          <p className="sk-fade flex items-center gap-2 sk-meta">
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
             Thinking…
           </p>
         )}
       </>
     );
-  } else if (pointers.length > 0) {
-    body = (
-      <>
-        <ul data-testid="question-pointers" className="list-disc space-y-1 pl-5 sk-body text-zinc-200">
-          {pointers.map((pointer, i) => (
-            <li key={i}>{pointer}</li>
-          ))}
-        </ul>
-        <p className="sk-meta">
-          Press <kbd className="sk-kbd">⌘↵</kbd> for a full answer
-        </p>
-      </>
-    );
   }
 
   return (
-    <section aria-label="Answer" className="sk-panel min-h-0 max-h-full">
+    <section aria-label="Answer" className="sk-panel sk-pop min-h-0">
       <div className="flex items-start gap-2 px-4 pt-3">
         <p className="sk-meta line-clamp-2 min-w-0 flex-1 pt-1.5">{question || "Ask anything"}</p>
         <button type="button" onClick={close} aria-label="Close" title="Close" className="sk-icon-btn">

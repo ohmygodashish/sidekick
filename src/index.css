@@ -14,31 +14,125 @@ body,
   -webkit-user-select: none;
 }
 
+/*
+ * Theme tokens. Components use only these (as Tailwind `sk-*` colours, see tailwind.config.js),
+ * never raw palette colours, so light and dark stay in step. Dark is the default; the theme
+ * setting sets data-theme="light" on <html> (System follows macOS, see useTheme).
+ */
+:root {
+  color-scheme: dark;
+  --sk-surface: rgb(24 24 27 / 0.92);
+  --sk-line: rgb(255 255 255 / 0.1);
+  --sk-shadow: 0 2px 6px rgb(0 0 0 / 0.25);
+
+  --sk-fg: #f4f4f5; /* primary text */
+  --sk-fg-2: #d4d4d8; /* secondary text, list items */
+  --sk-fg-3: #a1a1aa; /* meta, icons */
+  --sk-fg-4: #71717a; /* faint: placeholders, separators */
+
+  --sk-fill: rgb(255 255 255 / 0.04); /* rows */
+  --sk-fill-2: rgb(255 255 255 / 0.07); /* fields, key caps, secondary buttons */
+  --sk-hover: rgb(255 255 255 / 0.1);
+
+  --sk-accent: #7dd3fc; /* accent text and icons */
+  --sk-accent-tint: rgb(56 189 248 / 0.15); /* selected rows */
+  --sk-accent-solid: #0284c7; /* primary buttons; dark enough for white text */
+  --sk-accent-solid-hover: #0369a1;
+  --sk-on-solid: #ffffff;
+  --sk-focus: rgb(56 189 248 / 0.7);
+
+  --sk-danger: #fca5a5;
+  --sk-danger-tint: rgb(239 68 68 / 0.12);
+  --sk-danger-solid: #ef4444;
+  --sk-danger-solid-hover: #f87171;
+  --sk-warn: #fcd34d;
+  --sk-success: #6ee7b7;
+
+  /* Audio sources: system audio and the microphone */
+  --sk-system: #38bdf8;
+  --sk-mic: #fb923c;
+
+  --sk-code: rgb(0 0 0 / 0.3);
+  --sk-code-fg: #e4e4e7;
+  --sk-code-keyword: #7dd3fc;
+  --sk-code-string: #6ee7b7;
+  --sk-code-number: #fde68a;
+  --sk-code-comment: #71717a;
+  --sk-code-punct: #a1a1aa;
+
+  --sk-ease: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --sk-surface: rgb(250 250 250 / 0.9);
+  --sk-line: rgb(0 0 0 / 0.09);
+  --sk-shadow: 0 2px 6px rgb(0 0 0 / 0.12);
+
+  --sk-fg: #18181b;
+  --sk-fg-2: #3f3f46;
+  --sk-fg-3: #52525b;
+  --sk-fg-4: #71717a;
+
+  --sk-fill: rgb(0 0 0 / 0.03);
+  --sk-fill-2: rgb(0 0 0 / 0.05);
+  --sk-hover: rgb(0 0 0 / 0.06);
+
+  --sk-accent: #0369a1;
+  --sk-accent-tint: rgb(2 132 199 / 0.1);
+  --sk-accent-solid: #0284c7;
+  --sk-accent-solid-hover: #0369a1;
+  --sk-focus: rgb(2 132 199 / 0.6);
+
+  --sk-danger: #b91c1c;
+  --sk-danger-tint: rgb(220 38 38 / 0.08);
+  --sk-danger-solid: #dc2626;
+  --sk-danger-solid-hover: #b91c1c;
+  --sk-warn: #b45309;
+  --sk-success: #047857;
+
+  --sk-system: #0284c7;
+  --sk-mic: #ea580c;
+
+  --sk-code: rgb(0 0 0 / 0.04);
+  --sk-code-fg: #27272a;
+  --sk-code-keyword: #0369a1;
+  --sk-code-string: #047857;
+  --sk-code-number: #b45309;
+  --sk-code-comment: #71717a;
+  --sk-code-punct: #71717a;
+}
+
 @layer base {
-  html {
-    color-scheme: dark;
-  }
   body {
-    @apply text-zinc-100 antialiased;
+    @apply text-sk-fg antialiased;
   }
 }
 
 /*
- * Sidekick UI tokens. Every component uses these instead of picking its own values.
+ * Component classes. Every component uses these instead of picking its own values.
  * Radii are concentric: bar rounded-full/p-1 -> pill buttons; menu rounded-xl/p-1 -> items rounded-lg;
  * panel rounded-[20px]/p-3 -> inner blocks rounded-lg (20 = 8 + 12).
- * Text: 14px body, 13px controls, 12px meta, 11px key caps. Colours: zinc text, sky = action/focus,
- * red = recording/danger, emerald = success. No looping animations except a spinner while working.
+ * Text: 14px body, 13px controls, 12px meta, 11px key caps. Colours: sk-fg text, accent = action/focus,
+ * danger = recording/destructive, success = done, warn = attention. No looping animations except a
+ * spinner while working.
  */
 @layer components {
   .sk-surface {
-    @apply bg-zinc-900/90 text-zinc-100 shadow-[0_4px_16px_rgba(0,0,0,0.3)] ring-1 ring-inset ring-white/10;
+    @apply bg-sk-surface text-sk-fg;
+    /* Hairline and drop shadow in one. Set here so nested surfaces (the menu inside the bar)
+       don't inherit a recoloured hairline; a utility on the element overrides it. */
+    --sk-surface-line: var(--sk-line);
+    box-shadow:
+      inset 0 0 0 1px var(--sk-surface-line),
+      var(--sk-shadow);
   }
   .sk-bar {
     @apply sk-surface flex items-center gap-0.5 rounded-full p-1;
   }
   .sk-panel {
     @apply sk-surface flex flex-col rounded-[20px];
+    max-height: min(560px, 100%);
   }
   .sk-menu {
     @apply sk-surface rounded-xl p-1;
@@ -46,57 +140,108 @@ body,
 
   /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
   .sk-btn {
-    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-zinc-200 outline-none transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-sky-400/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-sk-fg-2 outline-none transition-[background-color,color,transform] duration-150 ease-out hover:bg-sk-hover hover:text-sk-fg focus-visible:ring-2 focus-visible:ring-sk-focus active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
   }
   .sk-icon-btn {
     @apply sk-btn w-8 justify-center px-0;
   }
   .sk-kbd {
-    @apply rounded-[5px] bg-white/10 px-1.5 text-[11px] font-medium leading-4 text-zinc-400 tabular-nums;
+    @apply rounded-[5px] bg-sk-fill-2 px-1.5 text-[11px] font-medium leading-4 text-sk-fg-3 tabular-nums;
   }
   .sk-sep {
-    @apply mx-0.5 h-4 w-px shrink-0 bg-white/10;
+    @apply mx-0.5 h-4 w-px shrink-0 bg-sk-line;
   }
 
   /* Menu */
   .sk-menu-item {
-    @apply flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] text-zinc-200 outline-none transition-colors duration-150 hover:bg-white/10 focus-visible:bg-white/10;
+    @apply flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[13px] text-sk-fg-2 outline-none transition-colors duration-150 hover:bg-sk-hover focus-visible:bg-sk-hover;
   }
 
   /* Panel internals */
   .sk-row {
-    @apply flex w-full items-center gap-2 rounded-lg bg-white/[0.04] px-3 py-2 text-left text-[13px] text-zinc-300 outline-none transition-colors duration-150 hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-sky-400/70;
+    @apply flex w-full items-center gap-2 rounded-lg bg-sk-fill px-3 py-2 text-left text-[13px] text-sk-fg-2 outline-none transition-colors duration-150 hover:bg-sk-hover focus-visible:ring-2 focus-visible:ring-sk-focus;
   }
   .sk-field {
-    @apply w-full rounded-lg bg-white/[0.06] px-3 py-2 text-[13px] text-zinc-100 outline-none ring-1 ring-inset ring-transparent transition-shadow duration-150 placeholder:text-zinc-500 focus:ring-sky-400/60;
+    @apply w-full rounded-lg bg-sk-fill-2 px-3 py-2 text-[13px] text-sk-fg outline-none ring-1 ring-inset ring-transparent transition-shadow duration-150 placeholder:text-sk-fg-4 focus:ring-sk-focus;
   }
   .sk-btn-primary {
-    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-sky-500 px-3 text-[13px] font-medium text-white outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-sky-400 focus-visible:ring-2 focus-visible:ring-sky-300/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-sk-accent-solid px-3 text-[13px] font-medium text-sk-on-solid outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-sk-accent-solid-hover focus-visible:ring-2 focus-visible:ring-sk-focus active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
   }
   .sk-btn-secondary {
-    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-white/[0.08] px-3 text-[13px] font-medium text-zinc-100 outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-white/[0.12] focus-visible:ring-2 focus-visible:ring-sky-400/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-sk-fill-2 px-3 text-[13px] font-medium text-sk-fg outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-sk-hover focus-visible:ring-2 focus-visible:ring-sk-focus active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
   }
   .sk-btn-danger {
-    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-red-500/90 px-3 text-[13px] font-medium text-white outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-red-500 focus-visible:ring-2 focus-visible:ring-red-300/70 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-sk-danger-solid px-3 text-[13px] font-medium text-sk-on-solid outline-none transition-[background-color,transform] duration-150 ease-out hover:bg-sk-danger-solid-hover focus-visible:ring-2 focus-visible:ring-sk-focus active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
   }
 
   /* Text roles */
   .sk-title {
-    @apply text-[14px] font-semibold text-zinc-100;
+    @apply text-[14px] font-semibold text-sk-fg;
   }
   .sk-body {
-    @apply text-[14px] leading-relaxed text-zinc-100;
+    @apply text-[14px] leading-relaxed text-sk-fg;
   }
   .sk-label {
-    @apply text-[12px] font-medium text-zinc-300;
+    @apply text-[12px] font-medium text-sk-fg-2;
   }
   .sk-meta {
-    @apply text-[12px] text-zinc-400;
+    @apply text-[12px] text-sk-fg-3;
   }
 
-  /* One thin dark scrollbar for every scroll area */
+  /* One thin scrollbar for every scroll area */
   .sk-scroll {
     scrollbar-width: thin;
-    scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+    scrollbar-color: var(--sk-hover) transparent;
+  }
+}
+
+/*
+ * Motion: quiet and quick, transform and opacity only.
+ * .sk-pop: popups and pieces that come and go. Enters via @starting-style; with usePresence,
+ *   data-state="closed" plays a faster exit before unmount.
+ * .sk-fade: text that changes often (options, captions); key the element by its text to refade.
+ */
+.sk-pop {
+  transition:
+    opacity 160ms var(--sk-ease),
+    transform 160ms var(--sk-ease);
+}
+.sk-pop[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  transition-duration: 120ms;
+  pointer-events: none;
+}
+.sk-fade {
+  transition: opacity 150ms var(--sk-ease);
+}
+@starting-style {
+  .sk-pop {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  .sk-fade {
+    opacity: 0;
+  }
+}
+/* Popups grow from their trigger */
+.sk-menu.sk-pop {
+  transform-origin: top right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-pop,
+  .sk-pop[data-state="closed"] {
+    transform: none;
+  }
+  /* No press-scale either; colour and opacity feedback remain */
+  *:active {
+    --tw-scale-x: 1;
+    --tw-scale-y: 1;
+  }
+  @starting-style {
+    .sk-pop {
+      transform: none;
+    }
   }
 }

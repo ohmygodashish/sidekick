@@ -246,9 +246,12 @@ pub struct TranscriptionResult {
     pub metal_accelerated: bool,
     /// Confidence estimate (0.0 to 1.0)
     pub confidence: f32,
-    /// Whether this result was produced by offline fallback/mock
+    /// Whether this result came from a canned test reply rather than a loaded model
     pub is_mock_or_fallback: bool,
 }
+
+/// Returned by `transcribe` when no model weights are loaded
+pub const NO_MODEL_ERROR: &str = "No local speech model is loaded";
 
 /// Local Whisper Engine interface
 pub trait WhisperEngine: Send + Sync {
@@ -409,6 +412,11 @@ impl LocalWhisperEngine {
         self.resolved_path.read().ok().and_then(|g| g.clone())
     }
 
+    /// True when real model weights are loaded (false for the canned test engine)
+    pub fn has_model(&self) -> bool {
+        !self.is_mock_mode.read().map(|g| *g).unwrap_or(true)
+    }
+
     /// Helper to compute Root-Mean-Square energy of a slice
     fn compute_rms(samples: &[f32]) -> f32 {
         if samples.is_empty() {
@@ -416,67 +424,6 @@ impl LocalWhisperEngine {
         }
         let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
         (sum_sq / samples.len() as f32).sqrt()
-    }
-
-    /// Fallback synthetic transcription when model weights are not loaded
-    fn fallback_transcribe(&self, samples: &[f32], sample_rate: u32) -> TranscriptionResult {
-        let start = Instant::now();
-        let rms = Self::compute_rms(samples);
-        let model_name = self.config.read().map(|c| c.model_name.clone()).unwrap_or_else(|_| "tiny.en".to_string());
-        let use_metal = self.config.read().map(|c| c.use_metal).unwrap_or(false);
-
-        // Check if explicit mock text was provided
-        if let Ok(guard) = self.mock_response.read() {
-            if let Some(ref text) = *guard {
-                return TranscriptionResult {
-                    text: text.clone(),
-                    latency_ms: start.elapsed().as_millis() as u64,
-                    model: model_name,
-                    metal_accelerated: false,
-                    confidence: 0.99,
-                    is_mock_or_fallback: true,
-                };
-            }
-        }
-
-        // If audio is silence (RMS below 0.005), return empty transcript
-        if rms < 0.005 || samples.is_empty() {
-            return TranscriptionResult {
-                text: String::new(),
-                latency_ms: start.elapsed().as_millis() as u64,
-                model: model_name,
-                metal_accelerated: false,
-                confidence: 1.0,
-                is_mock_or_fallback: true,
-            };
-        }
-
-        let duration_secs = samples.len() as f32 / sample_rate as f32;
-        let word_count = (duration_secs * 2.5).round().max(1.0) as usize;
-
-        // Context-aware fallback vocabulary for testing and offline simulation
-        let vocabulary = [
-            "Let's", "consider", "the", "system", "architecture", "and", "data", "flow",
-            "for", "handling", "distributed", "requests", "with", "sub-millisecond", "latency",
-            "while", "maintaining", "strict", "privacy", "guarantees",
-        ];
-
-        let mut words = Vec::new();
-        for i in 0..word_count {
-            let idx = (i + (rms * 1000.0) as usize) % vocabulary.len();
-            words.push(vocabulary[idx]);
-        }
-
-        let simulated_text = words.join(" ");
-
-        TranscriptionResult {
-            text: simulated_text,
-            latency_ms: start.elapsed().as_millis() as u64,
-            model: model_name,
-            metal_accelerated: use_metal && is_metal_supported(),
-            confidence: 0.95,
-            is_mock_or_fallback: true,
-        }
     }
 }
 
@@ -511,32 +458,32 @@ impl WhisperEngine for LocalWhisperEngine {
         }
 
         let is_mock = self.is_mock_mode.read().map(|g| *g).unwrap_or(true);
-
-        // If real context is loaded, execute actual whisper.cpp Metal inference!
-        if !is_mock {
-            if let Ok(guard) = self.context.lock() {
-                if let Some(ref ctx) = *guard {
-                    match run_real_whisper_transcription(ctx, samples, n_threads, &lang, translate) {
-                        Ok(text) => {
-                            return Ok(TranscriptionResult {
-                                text,
-                                latency_ms: start.elapsed().as_millis() as u64,
-                                model: model_name,
-                                metal_accelerated: use_metal && is_metal_supported(),
-                                confidence: 0.98,
-                                is_mock_or_fallback: false,
-                            });
-                        }
-                        Err(e) => {
-                            eprintln!("[Sidekick STT] Real whisper inference failed ({e}), falling back to simulated output");
-                        }
-                    }
-                }
-            }
+        if is_mock {
+            // Without weights, only a canned test reply is allowed; production has none and must not invent text
+            let canned = self.mock_response.read().ok().and_then(|g| g.clone());
+            return canned
+                .map(|text| TranscriptionResult {
+                    text,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    model: model_name,
+                    metal_accelerated: false,
+                    confidence: 0.99,
+                    is_mock_or_fallback: true,
+                })
+                .ok_or_else(|| NO_MODEL_ERROR.to_string());
         }
 
-        // In mock mode or when model path is unavailable, execute robust fallback
-        Ok(self.fallback_transcribe(samples, sample_rate))
+        let guard = self.context.lock().map_err(|e| e.to_string())?;
+        let ctx = guard.as_ref().ok_or_else(|| NO_MODEL_ERROR.to_string())?;
+        let text = run_real_whisper_transcription(ctx, samples, n_threads, &lang, translate)?;
+        Ok(TranscriptionResult {
+            text,
+            latency_ms: start.elapsed().as_millis() as u64,
+            model: model_name,
+            metal_accelerated: use_metal && is_metal_supported(),
+            confidence: 0.98,
+            is_mock_or_fallback: false,
+        })
     }
 
     fn is_ready(&self) -> bool {
@@ -613,16 +560,16 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_transcribe_speech_simulated() {
+    fn test_engine_speech_without_model_returns_no_text() {
         let engine = LocalWhisperEngine::new_mock(None);
+        assert!(!engine.has_model());
         // Create 1.5 seconds of non-silent 440Hz sine wave samples
         let samples: Vec<f32> = (0..24000)
             .map(|i| ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / 16000.0).sin()) * 0.5)
             .collect();
 
-        let result = engine.transcribe(&samples, 16000).expect("transcription succeeded");
-        assert!(!result.text.is_empty(), "Transcribed text should not be empty for active audio");
-        assert!(result.latency_ms < 400, "Latency must be < 400ms per AC-005");
+        let err = engine.transcribe(&samples, 16000).expect_err("no model must not yield text");
+        assert_eq!(err, NO_MODEL_ERROR);
     }
 
     #[test]

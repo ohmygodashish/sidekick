@@ -36,11 +36,11 @@ const Section: React.FC<SectionProps> = ({ rowTestId, icon, label, detail, defau
         {icon}
         <span className="min-w-0 truncate">
           {label}
-          {detail && <span className="text-zinc-400"> · {detail}</span>}
+          {detail && <span className="text-sk-fg-3"> · {detail}</span>}
         </span>
         <ChevronDown
           className={cn(
-            "ml-auto h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform duration-150",
+            "ml-auto h-3.5 w-3.5 shrink-0 text-sk-fg-3 transition-transform duration-150",
             open && "rotate-180"
           )}
           aria-hidden="true"
@@ -98,7 +98,7 @@ export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution: prop
       )}
 
       {tradeoffs.length > 0 && (
-        <ul className="list-disc space-y-1 pl-5 text-[14px] leading-relaxed text-zinc-300">
+        <ul className="list-disc space-y-1 pl-5 text-[14px] leading-relaxed text-sk-fg-2">
           {tradeoffs.map((item, i) => (
             <li key={i}>{item}</li>
           ))}
@@ -108,7 +108,7 @@ export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution: prop
       {hasCode && stage2 && (
         <Section
           rowTestId="answer-code-row"
-          icon={<CodeXml className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden="true" />}
+          icon={<CodeXml className="h-3.5 w-3.5 shrink-0 text-sk-fg-3" aria-hidden="true" />}
           label="Code"
           detail={stage2.language || undefined}
           defaultOpen
@@ -121,12 +121,12 @@ export const ProgressiveCard: React.FC<ProgressiveCardProps> = ({ solution: prop
       {hasComplexity && (
         <Section
           rowTestId="answer-complexity-row"
-          icon={<Clock className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden="true" />}
+          icon={<Clock className="h-3.5 w-3.5 shrink-0 text-sk-fg-3" aria-hidden="true" />}
           label="Complexity"
           detail={complexity || undefined}
           defaultOpen={false}
         >
-          <ul className="list-disc space-y-1 pl-5 text-[13px] text-zinc-300">
+          <ul className="list-disc space-y-1 pl-5 text-[13px] text-sk-fg-2">
             {edgeCases.map((item, i) => (
               <li key={i}>{item}</li>
             ))}

@@ -8,7 +8,8 @@
 //! - Immediate buffer flush and purge for panic killswitch (REQ-004).
 
 use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 /// Standard sample rate required by speech-to-text models (Whisper / Metal STT)
@@ -103,6 +104,59 @@ pub fn compute_rms(samples: &[f32]) -> f32 {
     }
     let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
     ((sum_sq / samples.len() as f64).sqrt()) as f32
+}
+
+/// Minimum gap between `audio_level` events
+pub const AUDIO_LEVEL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Maps RMS to a 0..1 meter: -50 dBFS reads 0.0 (room noise), -10 dBFS reads 1.0 (loud speech)
+pub fn level_from_rms(rms: f32) -> f32 {
+    let db = 20.0 * rms.max(1e-10).log10();
+    ((db + 50.0) / 40.0).clamp(0.0, 1.0)
+}
+
+fn window_level(sum_sq: f64, count: usize) -> f32 {
+    if count == 0 {
+        return 0.0;
+    }
+    level_from_rms((sum_sq / count as f64).sqrt() as f32)
+}
+
+#[derive(Default)]
+struct MeterWindow {
+    sum_sq: [f64; 2],
+    count: [usize; 2],
+    last_emit: Option<Instant>,
+}
+
+/// Per-channel RMS over the samples received since the last emit, shared by both capture callbacks
+#[derive(Default)]
+pub struct AudioLevelMeter {
+    window: Mutex<MeterWindow>,
+}
+
+impl AudioLevelMeter {
+    pub fn reset(&self) {
+        if let Ok(mut w) = self.window.lock() {
+            *w = MeterWindow::default();
+        }
+    }
+
+    /// Adds a callback's samples. Returns (interviewer, candidate) levels once `AUDIO_LEVEL_INTERVAL` has passed.
+    pub fn record(&self, channel: Channel, samples: &[f32]) -> Option<(f32, f32)> {
+        let mut w = self.window.lock().ok()?;
+        let i = channel.id() as usize;
+        w.sum_sq[i] += (compute_rms(samples) as f64).powi(2) * samples.len() as f64;
+        w.count[i] += samples.len();
+
+        let now = Instant::now();
+        if w.last_emit.is_some_and(|t| now.duration_since(t) < AUDIO_LEVEL_INTERVAL) {
+            return None;
+        }
+        let levels = (window_level(w.sum_sq[0], w.count[0]), window_level(w.sum_sq[1], w.count[1]));
+        *w = MeterWindow { last_emit: Some(now), ..MeterWindow::default() };
+        Some(levels)
+    }
 }
 
 /// Downmixes multi-channel interleaved audio to single-channel (mono) PCM.
@@ -635,5 +689,30 @@ mod tests {
         rb.purge();
         assert_eq!(rb.len(), 0);
         assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn test_level_from_rms_maps_db_range() {
+        assert_eq!(level_from_rms(0.0), 0.0);
+        assert_eq!(level_from_rms(10f32.powf(-56.0 / 20.0)), 0.0, "below -50 dBFS reads zero");
+        assert!((level_from_rms(10f32.powf(-30.0 / 20.0)) - 0.5).abs() < 1e-4);
+        assert_eq!(level_from_rms(1.0), 1.0, "0 dBFS clamps to full scale");
+    }
+
+    #[test]
+    fn test_audio_level_meter_throttles_and_reports_both_channels() {
+        let meter = AudioLevelMeter::default();
+        let speech = vec![0.1f32; 1600];
+
+        assert!(meter.record(Channel::Candidate, &speech).is_some(), "first window emits at once");
+        assert!(meter.record(Channel::Candidate, &speech).is_none(), "second callback is inside the interval");
+
+        std::thread::sleep(AUDIO_LEVEL_INTERVAL);
+        let (interviewer, candidate) = meter
+            .record(Channel::Interviewer, &speech)
+            .expect("interval passed, so a window is emitted");
+        let expected = level_from_rms(0.1);
+        assert!((interviewer - expected).abs() < 1e-3);
+        assert!((candidate - expected).abs() < 1e-3);
     }
 }

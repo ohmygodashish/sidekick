@@ -84,6 +84,7 @@ export const ApiKeyInputs: React.FC = () => {
   const [checks, setChecks] = useState<Partial<Record<ApiProvider, KeyCheck>>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
   const savedTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => () => window.clearTimeout(savedTimer.current), []);
@@ -108,11 +109,16 @@ export const ApiKeyInputs: React.FC = () => {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveFailed(false);
     try {
       await saveAllApiKeysToBackend();
       setSaved(true);
       window.clearTimeout(savedTimer.current);
       savedTimer.current = window.setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.warn("[Sidekick] saving API keys failed:", err);
+      setSaved(false);
+      setSaveFailed(true);
     } finally {
       setSaving(false);
     }
@@ -178,9 +184,9 @@ export const ApiKeyInputs: React.FC = () => {
           const inputId = `key-${provider.id}`;
 
           return (
-            <div key={provider.id} className="space-y-2 rounded-lg bg-white/[0.04] p-3">
+            <div key={provider.id} className="space-y-2 rounded-lg bg-sk-fill p-3">
               <div>
-                <h4 className="text-[13px] font-medium text-zinc-100">{provider.name}</h4>
+                <h4 className="text-[13px] font-medium text-sk-fg">{provider.name}</h4>
                 <p className="sk-meta">{provider.description}</p>
               </div>
 
@@ -225,7 +231,7 @@ export const ApiKeyInputs: React.FC = () => {
               {check && (
                 <p
                   role="status"
-                  className={cn("sk-meta", check.ok ? "text-emerald-400" : "text-red-300")}
+                  className={cn("sk-meta", check.ok ? "text-sk-success" : "text-sk-danger")}
                 >
                   {check.message}
                 </p>
@@ -237,8 +243,13 @@ export const ApiKeyInputs: React.FC = () => {
 
       <div className="flex items-center justify-end gap-3">
         {saved && (
-          <span role="status" className="sk-meta text-emerald-400">
+          <span role="status" className="sk-meta text-sk-success">
             Saved
+          </span>
+        )}
+        {saveFailed && (
+          <span role="status" className="sk-meta text-sk-danger">
+            Couldn&apos;t save keys. Try again.
           </span>
         )}
         <button type="button" onClick={handleSave} disabled={saving} className="sk-btn-primary">

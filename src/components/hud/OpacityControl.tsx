@@ -14,7 +14,7 @@ export const OpacityControl: React.FC = () => {
       step={1}
       value={Math.round(opacity * 100)}
       onChange={(e) => setOpacity(Number(e.target.value) / 100)}
-      className="h-1 min-w-0 flex-1 cursor-pointer accent-sky-400"
+      className="h-1 min-w-0 flex-1 cursor-pointer accent-sk-accent-solid"
     />
   );
 };

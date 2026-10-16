@@ -31,12 +31,12 @@ describe("SettingsDrawer", () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it("renders an inline dialog with four tabs, Keys selected by default", () => {
+    it("renders an inline dialog with five tabs, Keys selected by default", () => {
       render(<SettingsDrawer isOpen={true} />);
 
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeDefined();
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Danger"]);
+      expect(tabs.map((t) => t.textContent)).toEqual(["Keys", "Profile", "Audio", "Appearance", "Danger"]);
       expect(screen.getByRole("tab", { name: "Keys" }).getAttribute("aria-selected")).toBe("true");
     });
 
@@ -50,6 +50,9 @@ describe("SettingsDrawer", () => {
 
       openTab("Audio");
       expect(screen.getByRole("radiogroup", { name: "Speech-to-text engine" })).toBeDefined();
+
+      openTab("Appearance");
+      expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeDefined();
 
       openTab("Danger");
       expect(screen.getByText("These can't be undone.")).toBeDefined();
@@ -102,18 +105,32 @@ describe("SettingsDrawer", () => {
     it("does not show internal spec IDs or implementation names", () => {
       render(<SettingsDrawer isOpen={true} />);
 
-      for (const name of ["Keys", "Profile", "Audio", "Danger"]) {
+      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
         openTab(name);
         expect(screen.getByRole("dialog").textContent).not.toMatch(
           /REQ-|SEC-|ggml|Metal|ScreenCaptureKit|hardware-backed/i
         );
       }
     });
+
+    it("uses theme tokens, not palette colours, on every tab", () => {
+      render(<SettingsDrawer isOpen={true} />);
+      const palette =
+        /(?:^|[\s:])(?:text|bg|ring|border|placeholder|divide|fill)-(?:zinc|sky|red|emerald|amber|orange|slate|gray|white|black)\b/;
+
+      for (const name of ["Keys", "Profile", "Audio", "Appearance", "Danger"]) {
+        openTab(name);
+        const offenders = Array.from(screen.getByRole("dialog").querySelectorAll("[class]"))
+          .map((el) => el.getAttribute("class") ?? "")
+          .filter((cls) => palette.test(cls));
+        expect(offenders, `${name} tab`).toEqual([]);
+      }
+    });
   });
 
   describe("Keys tab", () => {
     it("saves keys to the backend and shows Saved", async () => {
-      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       fireEvent.change(screen.getByLabelText("OpenAI API key"), {
@@ -131,6 +148,18 @@ describe("SettingsDrawer", () => {
       // Cleared keys are propagated too, so deleted keys are wiped in the backend
       expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "anthropic", key: "" });
       expect(screen.getByText("Saved")).toBeDefined();
+    });
+
+    it("shows a failure instead of Saved when the backend rejects the save", async () => {
+      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("disk full"));
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
+      });
+
+      expect(screen.getByText("Couldn't save keys. Try again.")).toBeDefined();
+      expect(screen.queryByText("Saved")).toBeNull();
     });
 
     it("checks the key format only and never calls the backend", () => {
@@ -331,9 +360,53 @@ describe("SettingsDrawer", () => {
     });
   });
 
+  describe("Appearance tab", () => {
+    it("shows the saved theme as selected", () => {
+      useSettingsStore.setState({ theme: "dark" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      expect(within(group).getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+      expect(within(group).getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("false");
+      expect(screen.getByText("System follows your macOS appearance.")).toBeDefined();
+    });
+
+    it("sets the theme when an option is chosen", () => {
+      useSettingsStore.setState({ theme: "system" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      fireEvent.click(within(group).getByRole("radio", { name: "Light" }));
+
+      expect(useSettingsStore.getState().theme).toBe("light");
+      expect(within(group).getByRole("radio", { name: "Light" }).getAttribute("aria-checked")).toBe("true");
+      expect(within(group).getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("moves the theme selection with the arrow keys and wraps around", () => {
+      useSettingsStore.setState({ theme: "system" });
+      render(<SettingsDrawer isOpen={true} defaultTab="appearance" />);
+
+      const group = screen.getByRole("radiogroup", { name: "Theme" });
+      fireEvent.keyDown(within(group).getByRole("radio", { name: "System" }), { key: "ArrowRight" });
+      expect(useSettingsStore.getState().theme).toBe("light");
+      expect(document.activeElement).toBe(within(group).getByRole("radio", { name: "Light" }));
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+      expect(useSettingsStore.getState().theme).toBe("dark");
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowRight" });
+      expect(useSettingsStore.getState().theme).toBe("system");
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowLeft" });
+      expect(useSettingsStore.getState().theme).toBe("dark");
+      expect(within(group).getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+    });
+  });
+
   describe("Danger tab", () => {
     it("burns the session only on the second click and clears it after the confirm times out", async () => {
-      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       useSessionStore.getState().addTranscriptTurn({
         speaker: "interviewer",
         text: "Tell me about Paxos vs Raft.",
@@ -353,6 +426,19 @@ describe("SettingsDrawer", () => {
       expect(useSessionStore.getState().transcript.length).toBe(0);
       expect(spyInvoke).toHaveBeenCalledWith("burn_session");
       expect(screen.getByText("Session cleared")).toBeDefined();
+    });
+
+    it("shows a failure instead of Session cleared when the backend burn fails", async () => {
+      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("locked"));
+      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Burn" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Click again to burn" }));
+      });
+
+      expect(screen.getByText("Couldn't clear the session in the backend. Try again.")).toBeDefined();
+      expect(screen.queryByText("Session cleared")).toBeNull();
     });
 
     it("drops the burn confirm after 3 seconds", () => {
@@ -381,7 +467,7 @@ describe("SettingsDrawer", () => {
 
       const state = useSettingsStore.getState();
       expect(state.profile.seniorityPreset).toBe("senior");
-      expect(state.selectedModel).toBe("anthropic/claude-3.5-sonnet");
+      expect(state.selectedModel).toBe("anthropic/claude-haiku-5.5");
       expect(screen.getByText("Settings reset")).toBeDefined();
     });
 

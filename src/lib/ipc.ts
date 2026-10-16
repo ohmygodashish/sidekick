@@ -18,6 +18,14 @@ export async function safeInvoke<T>(
 }
 
 /**
+ * Invokes a Tauri command and rethrows its failure. A no-op outside Tauri (tests, browser).
+ */
+export async function invokeInTauri(cmd: string, args?: Record<string, unknown>): Promise<void> {
+  const { invoke, isTauri } = await import("@tauri-apps/api/core");
+  if (typeof isTauri === "function" && isTauri()) await invoke(cmd, args);
+}
+
+/**
  * Data payload returned by active-window vision capture (REQ-013, AC-003).
  */
 export interface WindowCaptureResponse {

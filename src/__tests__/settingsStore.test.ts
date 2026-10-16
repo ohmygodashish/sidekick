@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { useSettingsStore } from "../store/settingsStore";
+import { useSettingsStore, type SettingsState } from "../store/settingsStore";
+import * as ipc from "../lib/ipc";
 
 describe("useSettingsStore", () => {
   beforeEach(() => {
@@ -13,8 +14,8 @@ describe("useSettingsStore", () => {
   it("should have expected default settings", () => {
     const state = useSettingsStore.getState();
     expect(state.selectedProvider).toBe("openrouter");
-    expect(state.selectedModel).toBe("anthropic/claude-3.5-sonnet");
-    expect(state.evaluatorModel).toBe("groq/llama-3.3-70b-versatile");
+    expect(state.selectedModel).toBe("anthropic/claude-haiku-5.5");
+    expect(state.evaluatorModel).toBe("qwen/qwen3.8-27b");
     expect(state.sttMode).toBe("whisper_local");
     expect(state.profile.seniorityPreset).toBe("senior");
     expect(state.profile.tonePreset).toBe("balanced");
@@ -32,11 +33,24 @@ describe("useSettingsStore", () => {
 
   it("should update model and provider", () => {
     useSettingsStore.getState().setSelectedProvider("anthropic");
-    useSettingsStore.getState().setSelectedModel("claude-3-5-sonnet-20241022");
+    expect(useSettingsStore.getState().selectedProvider).toBe("anthropic");
 
-    const state = useSettingsStore.getState();
-    expect(state.selectedProvider).toBe("anthropic");
-    expect(state.selectedModel).toBe("claude-3-5-sonnet-20241022");
+    useSettingsStore.getState().setSelectedModel("claude-opus-custom");
+    expect(useSettingsStore.getState().selectedModel).toBe("claude-opus-custom");
+  });
+
+  it("switching provider resets the model to that provider's default", () => {
+    useSettingsStore.getState().setSelectedModel("anthropic/claude-haiku-5.5");
+    useSettingsStore.getState().setSelectedProvider("openai");
+
+    expect(useSettingsStore.getState().selectedModel).toBe("gpt-5.6-luna");
+  });
+
+  it("throws when a key cannot be saved to the backend", async () => {
+    vi.spyOn(ipc, "invokeInTauri").mockRejectedValueOnce(new Error("disk full"));
+    useSettingsStore.getState().setApiKey("openai", "sk-test");
+
+    await expect(useSettingsStore.getState().saveAllApiKeysToBackend()).rejects.toThrow("disk full");
   });
 
   it("should update personalization profile and presets", () => {
@@ -91,6 +105,43 @@ describe("useSettingsStore", () => {
     expect(parsed.state.selectedModel).toBe("gpt-4o");
     // In-memory state still retains the key
     expect(useSettingsStore.getState().apiKeys.openai).toBe("sk-secret-test-key-should-not-persist");
+  });
+});
+
+describe("persisted settings migration (version 0 -> 1)", () => {
+  const migrate = useSettingsStore.persist.getOptions().migrate!;
+
+  it("replaces only the stale model ids", () => {
+    const migrated = migrate(
+      {
+        selectedProvider: "openrouter",
+        selectedModel: "anthropic/claude-3.5-sonnet",
+        evaluatorModel: "groq/llama-3.3-70b-versatile",
+        sttMode: "groq",
+      },
+      0
+    ) as SettingsState;
+
+    expect(migrated.selectedModel).toBe("anthropic/claude-haiku-5.5");
+    expect(migrated.evaluatorModel).toBe("qwen/qwen3.8-27b");
+    expect(migrated.sttMode).toBe("groq");
+    expect(migrated.selectedProvider).toBe("openrouter");
+  });
+
+  it("uses the persisted provider's default for a stale model", () => {
+    const migrated = migrate({ selectedProvider: "gemini", selectedModel: "gemini-2.0-flash" }, 0) as SettingsState;
+
+    expect(migrated.selectedModel).toBe("gemini-3.8-flash");
+  });
+
+  it("leaves a model the user chose themselves alone", () => {
+    const migrated = migrate(
+      { selectedProvider: "openrouter", selectedModel: "anthropic/claude-haiku-5.5", evaluatorModel: "my/evaluator" },
+      0
+    ) as SettingsState;
+
+    expect(migrated.selectedModel).toBe("anthropic/claude-haiku-5.5");
+    expect(migrated.evaluatorModel).toBe("my/evaluator");
   });
 });
 

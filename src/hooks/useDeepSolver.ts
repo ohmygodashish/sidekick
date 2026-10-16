@@ -10,7 +10,6 @@ export interface SolveOptions {
   captureWindow?: boolean;
   provider?: ApiProvider;
   model?: string;
-  forceMock?: boolean;
 }
 
 export interface UseDeepSolverOptions {
@@ -171,7 +170,6 @@ export function useDeepSolver(options?: UseDeepSolverOptions) {
           imageBase64,
           questionId: questionObj?.questionId,
           signal: controller.signal,
-          forceMock: solveOptions?.forceMock,
           onProgressiveUpdate: (progressiveUpdate) => {
             if (controller.signal.aborted) return;
 
