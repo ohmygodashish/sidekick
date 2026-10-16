@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { CircleAlert, LoaderCircle, X } from "lucide-react";
 import { useSessionStore, DetectedQuestion } from "../../store/sessionStore";
 import { useAppStore } from "../../store/appStore";
+import { safeInvoke } from "../../lib/ipc";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
 
 const dispatchSolve = (question: DetectedQuestion) =>
@@ -52,6 +53,7 @@ export const AnswerPanel: React.FC = () => {
     setAskOpen(false);
     dispatchSolve(followUp);
     setDraft("");
+    safeInvoke("release_focus");
   };
 
   let body: React.ReactNode = null;
@@ -121,6 +123,12 @@ export const AnswerPanel: React.FC = () => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 submit();
+              } else if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+                // Close the box and give keyboard focus back to the app underneath
+                e.preventDefault();
+                setAskOpen(false);
+                inputRef.current?.blur();
+                safeInvoke("release_focus");
               }
             }}
           />

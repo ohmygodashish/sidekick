@@ -7,6 +7,7 @@ pub mod window;
 
 pub use accessory::configure_accessory_policy;
 pub use window::{
-    configure_stealth_window, configure_tauri_window, set_window_opacity, NSFloatingWindowLevel,
-    NSWindowSharingType, NSWindowStealthExt,
+    configure_non_activating, configure_stealth_window, configure_tauri_window, focus_for_typing,
+    on_became_key, release_key_focus, set_window_opacity, show_without_activating,
+    NSFloatingWindowLevel, NSWindowSharingType, NSWindowStealthExt,
 };

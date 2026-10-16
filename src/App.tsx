@@ -6,6 +6,7 @@ import { useSettingsStore } from "./store/settingsStore";
 import { useLiveOptions } from "./hooks/useLiveOptions";
 import { useDeepSolver } from "./hooks/useDeepSolver";
 import { useTheme } from "./hooks/useTheme";
+import { useFocusRelease } from "./hooks/useFocusRelease";
 import { setSttEngine } from "./lib/ipc";
 
 export default function App() {
@@ -20,6 +21,9 @@ export default function App() {
 
   // System / Light / Dark from Settings
   useTheme();
+
+  // Keyboard focus returns to the previous app after clicks outside text fields
+  useFocusRelease();
 
   useEffect(() => {
     syncFromBackend();

@@ -1,8 +1,8 @@
 //! Global Shortcuts Engine & Instant Panic Killswitch
 //!
 //! Provides OS-level global keyboard shortcuts and Tauri IPC commands for:
-//! - Panic Killswitch (`Cmd + Esc` / `Super + Escape`): Synchronously hides window, sets panic state, emits `sidekick://panic` (< 25ms).
-//! - Window Visibility Toggle (`Cmd + Shift + Space` / `Super + Shift + Space`): Shows & focuses or hides window.
+//! - Panic Killswitch (`Cmd + Esc` / `Super + Escape`): Synchronously hides window, sets panic state, emits `sidekick://panic`, deletes the session DB, then quits the process.
+//! - Window Visibility Toggle (`Cmd + Shift + Space` / `Super + Shift + Space`): Shows without taking focus, or hides and hands focus back.
 //! - Click-Through Toggle (`Cmd + Shift + C` / `Super + Shift + C`): Enables mouse pass-through to underlying apps.
 //! - Layout Mode Toggle (`Cmd + Shift + M` / `Super + Shift + M`): Toggles compact view (control bar only) on and off.
 //! - Opacity Configuration: Controls window alpha level.
@@ -87,9 +87,9 @@ impl std::fmt::Display for LayoutMode {
 /// Discrete high-level actions triggered by global shortcuts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidekickAction {
-    /// Synchronously hide all UI, abort network streams, flush audio buffers (< 25ms)
+    /// Synchronously hide all UI, abort network streams, flush audio buffers, delete the session DB, then quit
     Panic,
-    /// Toggle window visibility (show + focus if hidden, hide if visible)
+    /// Toggle window visibility (show without focus if hidden, hide and release focus if visible)
     ToggleVisibility,
     /// Toggle mouse cursor transparency / event passthrough
     ToggleClickThrough,
@@ -174,11 +174,7 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
     let state = app.state::<HotkeyState>();
     if let Some(action) = resolve_action(shortcut) {
         match action {
-            SidekickAction::Panic => {
-                if let Err(e) = trigger_panic(app, &state) {
-                    eprintln!("[Sidekick Hotkeys] Failed to execute panic: {e}");
-                }
-            }
+            SidekickAction::Panic => panic_and_quit(app, &state),
             SidekickAction::ToggleVisibility => {
                 if let Err(e) = toggle_window_visibility(app, &state) {
                     eprintln!("[Sidekick Hotkeys] Failed to toggle visibility: {e}");
@@ -224,14 +220,16 @@ pub fn handle_shortcut<R: Runtime>(app: &AppHandle<R>, shortcut: &Shortcut) {
     }
 }
 
-/// Synchronously hides the window, marks state as panicked, and emits the panic event (< 25ms).
+/// Synchronously hides the window, marks state as panicked, emits the panic event and deletes the
+/// session DB files (< 25ms).
 pub fn trigger_panic<R: Runtime>(
     app: &AppHandle<R>,
     state: &HotkeyState,
 ) -> Result<(), String> {
-    // 1. Immediately and synchronously hide the main window (< 1ms)
+    // 1. Immediately and synchronously hide the main window (< 1ms) and hand focus back
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        let _ = crate::appkit::release_key_focus(&window);
     }
 
     // 2. Mark state as panicked
@@ -256,10 +254,37 @@ pub fn trigger_panic<R: Runtime>(
         }),
     );
 
+    // 4. Delete the session DB records and files (REQ-017)
+    crate::storage::db::delete_session_db();
+
     Ok(())
 }
 
-/// Toggles window visibility. If currently hidden (or panicked), summons and focuses window.
+/// Panic, then quit the process so nothing of Sidekick stays running. Never returns.
+pub fn panic_and_quit<R: Runtime>(app: &AppHandle<R>, state: &HotkeyState) -> ! {
+    if let Err(e) = trigger_panic(app, state) {
+        eprintln!("[Sidekick Hotkeys] Failed to execute panic: {e}");
+    }
+    std::process::exit(0)
+}
+
+/// Hides the main window, hands keyboard focus back to the previous app, and tells the frontend.
+pub fn hide_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window 'main' not found".to_string())?;
+    window.hide().map_err(|e| e.to_string())?;
+    // Non-fatal: the window is already hidden, so the visibility event must still go out
+    let _ = crate::appkit::release_key_focus(&window);
+    let _ = app.emit(
+        EVENT_VISIBILITY_TOGGLED,
+        serde_json::json!({ "visible": false }),
+    );
+    Ok(())
+}
+
+/// Toggles window visibility. If hidden (or panicked), shows it without taking keyboard focus;
+/// if visible, hides it and hands focus back.
 pub fn toggle_window_visibility<R: Runtime>(
     app: &AppHandle<R>,
     state: &HotkeyState,
@@ -267,17 +292,12 @@ pub fn toggle_window_visibility<R: Runtime>(
     if let Some(window) = app.get_webview_window("main") {
         let is_visible = window.is_visible().map_err(|e| e.to_string())?;
         if is_visible {
-            window.hide().map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                EVENT_VISIBILITY_TOGGLED,
-                serde_json::json!({ "visible": false }),
-            );
+            hide_window(app)?;
             Ok(false)
         } else {
             // Reset panic state when summoning the overlay
             state.is_panicked.store(false, Ordering::SeqCst);
-            window.show().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
+            crate::appkit::show_without_activating(&window).map_err(|e| e.to_string())?;
             let _ = app.emit(
                 EVENT_VISIBILITY_TOGGLED,
                 serde_json::json!({ "visible": true }),
@@ -397,13 +417,38 @@ pub mod commands {
         super::set_click_through(&app, &state, enabled)
     }
 
-    /// IPC command: synchronously triggers panic shutdown (< 25ms)
+    /// IPC command: panic shutdown (< 25ms). Wipes the session and quits the process; never returns
     #[tauri::command]
     pub fn trigger_panic(
         app: AppHandle,
         state: State<'_, HotkeyState>,
     ) -> Result<(), String> {
-        super::trigger_panic(&app, &state)
+        super::panic_and_quit(&app, &state)
+    }
+
+    /// IPC command: hides the overlay and hands keyboard focus back to the previous app
+    #[tauri::command]
+    pub fn hide_window(app: AppHandle) -> Result<(), String> {
+        super::hide_window(&app)
+    }
+
+    /// IPC command: hands keyboard focus back to the previous app (the frontend calls this when
+    /// the user clicks away from a text field)
+    #[tauri::command]
+    pub fn release_focus(app: AppHandle) -> Result<(), String> {
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window 'main' not found".to_string())?;
+        crate::appkit::release_key_focus(&window).map_err(|e| e.to_string())
+    }
+
+    /// IPC command: makes Sidekick the active app so the text field just focused can take keys
+    #[tauri::command]
+    pub fn focus_for_typing(app: AppHandle) -> Result<(), String> {
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window 'main' not found".to_string())?;
+        crate::appkit::focus_for_typing(&window).map_err(|e| e.to_string())
     }
 
     /// IPC command: sets window opacity

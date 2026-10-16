@@ -129,12 +129,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hideWindow: async () => {
     set({ isVisible: false });
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().hide();
-    } catch {
-      // Outside Tauri there is no window to hide
-    }
+    // Rust hides the window and hands keyboard focus back; outside Tauri safeInvoke is a no-op
+    await safeInvoke("hide_window");
   },
 
   syncFromBackend: async () => {

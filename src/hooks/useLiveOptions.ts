@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useSessionStore, DetectedQuestion } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
+import { safeInvoke } from "../lib/ipc";
 import { fetchLiveOptions, formatTranscript, liveOptionsErrorMessage } from "../services/ai/liveOptions";
 
 export interface LiveOption {
@@ -40,6 +41,8 @@ export function pickLiveOption(index: number) {
   const app = useAppStore.getState();
   if (app.layoutMode === "dynamic_notch") app.setLayoutMode("floating_hud");
   app.setAskOpen(false);
+  // A hotkey pick can close Ask while its input has the keyboard; hand it back
+  safeInvoke("release_focus");
   window.dispatchEvent(new CustomEvent("sidekick:deep_solve", { detail: question }));
 }
 
