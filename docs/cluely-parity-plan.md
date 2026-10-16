@@ -1,7 +1,7 @@
 # Cluely parity and polish plan (16 Oct 2026)
 
 Decided with the user in a grill-me session, using screenshots of Cluely 2.1.24 (pill, mode menu, answer panel, Settings: General, Modes, Keybinds, About). Branch: `cluely-parity`, cut from `fix/usability-overhaul`, at least one commit per phase, local only.
-Builds on [`overhaul-plan.md`](overhaul-plan.md); its decisions still hold unless changed here. Audit IDs refer to [`audit.md`](audit.md).
+Builds on [`overhaul-plan.md`](archive/overhaul-plan.md); its decisions still hold unless changed here. Audit IDs refer to [`audit.md`](archive/audit.md).
 
 ## Goals
 

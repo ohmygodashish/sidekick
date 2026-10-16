@@ -450,9 +450,7 @@ sidekick/
 ├── docs/
 │   ├── spec-architecture-sidekick-copilot.md  # Core architectural specification
 │   ├── cluely-parity-plan.md       # Current decisions, shortcut map and phases
-│   ├── implementation-plan.md      # Original phased engineering plan (superseded)
-│   ├── overhaul-plan.md            # Usability overhaul plan (superseded)
-│   └── audit.md                    # Code and design audit with current fix status
+│   └── archive/                    # Superseded: original build plan, usability overhaul plan, 16 Oct audit
 ├── src/                            # React 19 Frontend Webview
 │   ├── __tests__/                  # Vitest unit and integration test suites
 │   ├── components/
