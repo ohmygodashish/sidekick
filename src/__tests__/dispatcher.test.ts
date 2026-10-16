@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { dispatchDeepSolve } from "../services/ai/dispatcher";
+import { dispatchDeepSolve, reasoningFor } from "../services/ai/dispatcher";
+import type { ReasoningMode } from "../services/ai/openrouter";
+import type { SettingsState } from "../store/settingsStore";
+import type { MessageKind } from "../store/sessionStore";
 
 const ANSWER_XML = `<stage_1_intuition><verbal_summary>Use a hash map.</verbal_summary></stage_1_intuition>`;
 
@@ -28,10 +31,16 @@ const anthropicRequest = {
   apiKey: "sk-ant-test",
   model: "claude-haiku-5-5",
   prompt: "Two sum",
+  reasoning: "none" as const,
 };
 
 // Streams below use OpenRouter's chat-completion events, which is what sseLine emits
-const openRouterRequest = { provider: "openrouter" as const, apiKey: "sk-or-test", prompt: "Two sum" };
+const openRouterRequest = {
+  provider: "openrouter" as const,
+  apiKey: "sk-or-test",
+  prompt: "Two sum",
+  reasoning: "none" as const,
+};
 
 describe("dispatchDeepSolve", () => {
   beforeEach(() => {
@@ -47,7 +56,7 @@ describe("dispatchDeepSolve", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     await expect(
-      dispatchDeepSolve({ provider: "groq", apiKey: "  ", prompt: "Two sum" })
+      dispatchDeepSolve({ provider: "groq", apiKey: "  ", prompt: "Two sum", reasoning: "none" })
     ).rejects.toMatchObject({ message: "Add your Groq API key in Settings → Keys." });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -71,9 +80,12 @@ describe("dispatchDeepSolve", () => {
     const network = new TypeError("Failed to fetch");
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(network);
 
-    const err = await dispatchDeepSolve({ provider: "openrouter", apiKey: "sk-or-test", prompt: "x" }).catch(
-      (e) => e
-    );
+    const err = await dispatchDeepSolve({
+      provider: "openrouter",
+      apiKey: "sk-or-test",
+      prompt: "x",
+      reasoning: "none",
+    }).catch((e) => e);
 
     expect(err.message).toBe("Couldn't reach OpenRouter. Check your connection.");
     expect(err.cause).toBe(network);
@@ -170,5 +182,176 @@ describe("dispatchDeepSolve", () => {
 
     expect(solution.stage1Intuition?.verbalSummary).toBe("Use a hash map.");
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("reasoningFor", () => {
+  type Thinking = Pick<SettingsState, "answerThinking" | "answerThinkingLevel" | "pickThinking">;
+  const off: Thinking = { answerThinking: false, answerThinkingLevel: "high", pickThinking: true };
+  const on = (answerThinkingLevel: Thinking["answerThinkingLevel"], pickThinking = false): Thinking => ({
+    answerThinking: true,
+    answerThinkingLevel,
+    pickThinking,
+  });
+  // A level from a hand-edited config, which the type doesn't allow
+  const bogus = "bogus" as unknown as Thinking["answerThinkingLevel"];
+
+  it.each<[string, MessageKind, Thinking, ReasoningMode]>([
+    ["thinking off: a typed question", "typed", off, "none"],
+    ["thinking off: Assist", "assist", off, "none"],
+    ["thinking off: an option pick, even with picks on", "option", off, "none"],
+    ["picks off: a typed question thinks at the level", "typed", on("low"), "low"],
+    ["picks off: Assist thinks at the level", "assist", on("high"), "high"],
+    ["picks off: an option pick stays fast", "option", on("high"), "none"],
+    ["picks on: an option pick thinks at the level", "option", on("low", true), "low"],
+    ["picks on: an option pick at medium", "option", on("medium", true), "medium"],
+    ["picks on: an option pick at high", "option", on("high", true), "high"],
+    ["an unknown level falls back to medium for a typed question", "typed", on(bogus), "medium"],
+    ["an unknown level falls back to medium for a pick", "option", on(bogus, true), "medium"],
+  ])("%s", (_name, kind, settings, expected) => {
+    expect(reasoningFor(kind, settings)).toBe(expected);
+  });
+});
+
+describe("retrying a thinking setting that a provider refuses", () => {
+  const refusal = (message: string) => new Response(JSON.stringify({ error: { message } }), { status: 400 });
+  const bodyOf = (call: unknown[]) => JSON.parse((call[1] as RequestInit).body as string);
+  const anthropicAnswer = () =>
+    new Response(
+      `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: ANSWER_XML } })}\n\n`,
+      { status: 200 }
+    );
+
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("gives the retried request a full stall window of its own", async () => {
+    vi.useFakeTimers();
+    let refuse!: (response: Response) => void;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            refuse = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          })
+      );
+
+    const failure = dispatchDeepSolve({
+      provider: "openai",
+      apiKey: "sk-test",
+      model: "gpt-6-sol",
+      prompt: "x",
+      reasoning: "high",
+    }).catch((e) => e);
+    let settled = false;
+    void failure.then(() => {
+      settled = true;
+    });
+
+    // The refusal comes 20 s in, most of the way through the first request's 25 s
+    await vi.advanceTimersByTimeAsync(20_000);
+    refuse(refusal("reasoning_effort is not supported"));
+    // 40 s in, the retry is still inside its own 25 s, so nothing has failed yet
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(settled).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await failure).message).toBe("The model stopped responding. Retry, or pick a faster model in Settings.");
+  });
+
+  it("retries once without thinking when a 400 names reasoning_effort, and answers", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(refusal("Unsupported parameter: reasoning_effort"))
+      .mockResolvedValueOnce(sseResponse(ANSWER_XML));
+
+    const solution = await dispatchDeepSolve({
+      provider: "openai",
+      apiKey: "sk-test",
+      model: "gpt-6-sol",
+      prompt: "Two sum",
+      reasoning: "high",
+    });
+
+    expect(solution.stage1Intuition?.verbalSummary).toBe("Use a hash map.");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(bodyOf(fetchSpy.mock.calls[0])).toMatchObject({ reasoning_effort: "high" });
+    expect(bodyOf(fetchSpy.mock.calls[1])).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("retries an Anthropic thinking refusal with the model's default thinking", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(refusal("thinking.output_config is not supported for this model"))
+      .mockResolvedValueOnce(anthropicAnswer());
+
+    await dispatchDeepSolve({
+      provider: "anthropic",
+      apiKey: "sk-ant-test",
+      model: "claude-haiku-5-5",
+      prompt: "Two sum",
+      reasoning: "low",
+    });
+
+    expect(bodyOf(fetchSpy.mock.calls[0])).toMatchObject({ output_config: { effort: "low" } });
+    const retried = bodyOf(fetchSpy.mock.calls[1]);
+    expect(retried).not.toHaveProperty("output_config");
+    expect(retried).not.toHaveProperty("thinking");
+    expect(retried.max_tokens).toBe(16000);
+  });
+
+  it("gives the retry at most one chance: a second refusal is reported", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(refusal("reasoning not allowed"))
+      .mockResolvedValueOnce(refusal("reasoning not allowed"));
+
+    await expect(
+      dispatchDeepSolve({ provider: "openai", apiKey: "sk-test", model: "gpt-6-sol", prompt: "x", reasoning: "high" })
+    ).rejects.toMatchObject({ message: "OpenAI returned HTTP 400." });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a 400 that doesn't name thinking", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(refusal("messages missing"));
+
+    await expect(
+      dispatchDeepSolve({ provider: "openai", apiKey: "sk-test", model: "gpt-6-sol", prompt: "x", reasoning: "high" })
+    ).rejects.toMatchObject({ message: "OpenAI returned HTTP 400." });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when the request sent no thinking fields to begin with", async () => {
+    // GPT-6 Astra can't turn thinking off, so "none" is sent as nothing and a refusal can't be about it
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(refusal("reasoning_effort is not supported"));
+
+    await expect(
+      dispatchDeepSolve({ provider: "openai", apiKey: "sk-test", model: "gpt-6-astra", prompt: "x", reasoning: "none" })
+    ).rejects.toMatchObject({ message: "OpenAI returned HTTP 400." });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a 400 that is about something other than thinking", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(refusal("max_tokens is too large"));
+
+    await expect(
+      dispatchDeepSolve({ provider: "anthropic", apiKey: "sk-ant-test", model: "claude-haiku-5-5", prompt: "x", reasoning: "high" })
+    ).rejects.toMatchObject({ message: "Anthropic returned HTTP 400." });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

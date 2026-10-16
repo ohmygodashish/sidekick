@@ -63,7 +63,6 @@ const THEMES: { id: ThemePreference; label: string; icon: LucideIcon }[] = [
 const STT_OPTIONS: { id: SttMode; name: string; description: string }[] = [
   { id: "whisper_local", name: "On this Mac", description: "Runs offline. Audio stays on this device." },
   { id: "groq", name: "Groq cloud", description: "Fast cloud transcription. Needs a Groq key." },
-  { id: "deepgram", name: "Deepgram streaming", description: "Live cloud streaming. Needs a Deepgram key." },
 ];
 
 // Keybinds tab: groups in the order they first appear in SHORTCUTS
@@ -161,8 +160,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const tinyModel = localModels.find((m) => m.filename.includes("tiny"));
   const modelReady = Boolean(tinyModel?.is_available);
-  const sttKeyMissing =
-    (sttMode === "groq" && !apiKeys.groq) || (sttMode === "deepgram" && !apiKeys.deepgram);
+  const sttKeyMissing = sttMode === "groq" && !apiKeys.groq;
 
   const handleDownloadModel = async () => {
     setDownloading(true);
@@ -326,7 +324,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </div>
               {sttKeyMissing && (
                 <p className="sk-meta">
-                  Add a {sttMode === "groq" ? "Groq" : "Deepgram"} key on the API keys tab to use this engine.
+                  Add a Groq key on the API keys tab to use this engine.
                 </p>
               )}
             </div>
@@ -513,7 +511,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             <div className="space-y-2 rounded-lg bg-sk-fill p-3">
               <h3 className="text-[13px] font-medium text-sk-fg">Reset settings</h3>
               <p className="sk-meta">
-                Restores models, persona, speech, language, microphone and theme settings to their defaults, and the
+                Restores models, thinking, persona, speech, language, microphone and theme settings to their defaults, and the
                 active mode to General. API keys and custom modes are kept.
               </p>
               <div className="flex flex-wrap items-center gap-3">

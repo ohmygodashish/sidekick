@@ -52,9 +52,9 @@ Sidekick is a desktop copilot that runs natively on macOS. Unlike browser extens
 - **Headless Phantom Operation**: No Dock tile, no Menu Bar icon, and excluded from `Cmd + Tab`. You summon it purely through muscle-memory hardware hotkeys.
 - **Minimal Overlay**: One control bar at the top of the screen (Start/Stop meeting, Ask, Hide, and a menu). While a meeting is live, a caption and three live options sit under it, with one panel below for answers or settings. Clicks pass through everywhere except the visible pieces. Dark and light themes (Settings → Appearance). Compact view leaves only the bar.
 - **Driverless Dual-Channel Audio**: Simultaneously captures remote meeting audio via Apple's macOS 13+ `ScreenCaptureKit` and your microphone via CoreAudio—no virtual audio cables (BlackHole, Soundflower, Loopback) required.
-- **On-Device Metal AI or Cloud Fallback**: Runs 100% offline Metal GPU-accelerated `whisper.cpp` transcription, with one-click toggles for Deepgram Nova-2 and Groq Whisper.
+- **On-Device Metal AI or Cloud Fallback**: Runs 100% offline Metal GPU-accelerated `whisper.cpp` transcription, with a one-click switch to Groq Whisper for cloud transcription.
 - **Live Options**: While you talk, three numbered questions keep updating: the one the interviewer just asked (pinned in slot 1) and the ones they're likely to ask next. Press <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> or click one to get its answer.
-- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Gemini, Groq or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. Nothing is ever invented: a missing key, a provider error or a stalled stream shows a short error instead of an answer, and speech-to-text failures show in the caption instead of made-up words.
+- **Progressive Answers**: Answers stream from Anthropic, OpenAI, Groq or OpenRouter models into one panel: a short answer with key points, then expandable **Code** and **Complexity** rows. A box at the bottom takes typed questions and follow-ups. Nothing is ever invented: a missing key, a provider error or a stalled stream shows a short error instead of an answer, and speech-to-text failures show in the caption instead of made-up words.
 - **Local Key Storage**: API keys and settings live in a local config file (`~/.config/sidekick/config.json`, readable only by your macOS user). Session data is held in an ephemeral SQLite database that is scrubbed on panic or single-click burn.
 
 ```
@@ -87,9 +87,9 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
 | **2** | **Headless Phantom Operation** | Runs under `NSApplicationActivationPolicyAccessory` with `LSUIElement = true`. Zero Dock icon, zero Menu Bar tray, excluded from `Cmd + Tab`. Summoned exclusively via hotkeys. |
 | **3** | **Minimal Overlay UX** | One draggable control bar (Start/Stop meeting, Ask, Hide, menu), a live caption and options while listening, and a single answer or settings panel. The window never resizes; Rust passes clicks through everywhere except the visible pieces. Opacity 15%–100%, click-through, dark/light themes, and a compact view that shows only the bar. |
 | **4** | **Driverless Dual-Audio** | Ingests pristine system audio via macOS 13+ `ScreenCaptureKit` and candidate voice via microphone into discrete Channel 0 (Interviewer) and Channel 1 (Candidate). Zero drivers needed. |
-| **5** | **Selectable STT** | Embedded Metal-accelerated `whisper.cpp` (`whisper-rs`) for 100% private offline transcription, with instant Cloud STT toggles (Deepgram Nova-2 / Groq Whisper). |
+| **5** | **Selectable STT** | Embedded Metal-accelerated `whisper.cpp` (`whisper-rs`) for 100% private offline transcription, with an instant Cloud STT toggle (Groq Whisper). |
 | **6** | **Live Options** | After every transcript turn, one fast Groq call (`qwen/qwen3.8-27b` by default, about 0.4 s) returns the question just asked and three likely next questions. Without a Groq key, a local heuristic still spots asked questions. |
-| **7** | **Multi-Provider Deep Engine** | Direct streaming integration for OpenRouter, Anthropic Direct, OpenAI Direct, and Google Gemini Direct with progressive disclosure rendering (Intuition $\rightarrow$ Code $\rightarrow$ Complexity). |
+| **7** | **Multi-Provider Deep Engine** | Direct streaming integration for OpenRouter, Anthropic Direct, and OpenAI Direct with progressive disclosure rendering (Intuition $\rightarrow$ Code $\rightarrow$ Complexity). |
 | **8** | **Credential Security** | API keys and settings stored in a local JSON config file (`~/.config/sidekick/config.json`, mode `0600`). Ephemeral local SQLite database with instant < 25ms Panic killswitch and session burn. |
 
 ---
@@ -108,7 +108,7 @@ Sidekick strictly enforces eight architectural mandates defined in [`docs/spec-a
    - Press <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd>. A control bar appears at the top-centre of the screen, just under the menu bar.
 4. **Configure Your API Keys**:
    - Press <kbd>Cmd</kbd> + <kbd>,</kbd> (or open the **⋯** menu and choose **Settings**).
-   - In the **Keys** tab, enter your provider keys: Groq for live options and fast transcription, and one of OpenRouter/Anthropic/OpenAI/Gemini (or Groq) for full answers. The answer model is chosen per provider; switching provider switches to that provider's default model.
+   - In the **Keys** tab, enter your provider keys: Groq for live options and fast transcription, and one of OpenRouter/Anthropic/OpenAI (or Groq) for full answers. The answer model is chosen per provider; switching provider switches to that provider's default model.
    - Click **Save keys**. Keys are written to `~/.config/sidekick/config.json` (see [3.7](#37-api-key--settings-storage)).
 5. **Start a Meeting**:
    - Click **Start** in the bar. Sidekick listens only while a meeting is live; the button then shows two level dots (sky = system audio, orange = microphone) and the elapsed time, and the caption and live options appear under the bar.
@@ -172,7 +172,7 @@ While a meeting is live, a card under the caption shows three numbered questions
 
 How it works:
 1. System audio (the interviewer) and your microphone are split into turns by voice activity detection (a turn ends after 1.1 s of silence, or at 15 s).
-2. Each turn is transcribed (Groq Whisper, Deepgram, or the local model) and shown in the caption.
+2. Each turn is transcribed (Groq Whisper or the local model) and shown in the caption.
 3. After every turn, one Groq request sends the last 12 turns and gets back `{ "asked": …, "likely": [ … ] }`. One request runs at a time; turns that arrive meanwhile trigger one rerun with the latest transcript.
 4. Without a Groq key, a local heuristic still spots asked questions in the interviewer's turns, but there are no predictions.
 
@@ -205,6 +205,21 @@ The answer streams into one panel:
 
 - **Code** is expanded by default; click its row to collapse it. **Copy** puts the code on your clipboard.
 - **Complexity** is collapsed by default; expand it to see edge cases.
+
+#### Thinking (reasoning) settings
+In Settings $\rightarrow$ **Keys**, under the solution model, two switches and a level control how hard the answer model thinks:
+- **Think before answering** (on, at Medium by default) applies to typed questions and <kbd>Cmd</kbd> + <kbd>Return</kbd> Assist. Off turns thinking off where the model allows it.
+- **Thinking level** (Low, Medium or High) sets how much the model thinks when thinking is on.
+- **Also think for picked options** (off by default) applies the same level to option picks and the background answer for the asked question. Off keeps picks fast.
+
+The settings apply to these models, through Anthropic, OpenAI or OpenRouter:
+- **Anthropic (direct)**: Claude Haiku 5.5 (`claude-haiku-5-5`), Sonnet 5 and 5.5 (`claude-sonnet-5`, `claude-sonnet-5-5`), Sonnet 4.6, Opus 4.5 and later (including `claude-opus-5-5`), and Fable.
+- **OpenAI (direct)**: GPT-5.x (for example `gpt-5.6-luna`), GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6-astra`, `gpt-6.1-sol`) and the o-series reasoning models.
+- **OpenRouter**: the same models with an `anthropic/` or `openai/` prefix, for example `anthropic/claude-haiku-5.5` or `openai/gpt-5.6-luna`.
+
+Other models and providers don't take the setting, and their switches are greyed out. That covers Groq, other OpenRouter models, and older generations such as Claude 3.5 or GPT-4o.
+
+Some models always think. For these, Off sends nothing and the model uses its default level: `claude-opus-5-5`, Fable and Mythos, OpenRouter's `anthropic/claude-sonnet-5.5`, `gpt-6-astra`, `gpt-6.1-sol`, and the GPT-5 models other than GPT-5.6 (for example `gpt-5` and `gpt-5-mini`). Settings says so under the switch. If a provider refuses the thinking setting with an error, Sidekick retries the answer once without it.
 
 #### Personalization Profiles
 In Settings $\rightarrow$ **Profile** (`Cmd + ,`), configure:
@@ -260,7 +275,7 @@ The file looks like this:
 - **Writes**: Each save writes a temp file and renames it over the old one. Writes are serialized with a lock.
 - **Corrupt file**: If the file cannot be parsed, it is renamed to `config.json.corrupt-<unix seconds>` and Sidekick starts a fresh file. Unknown top-level keys are kept.
 - **Settings**: Provider, models, speech-to-text engine, persona and tone, target company, job description, resume text, and layout preferences are stored in this file, not in browser storage. Settings saved by an older build are moved here automatically on first launch.
-- **Supported Providers**: **OpenRouter**, **Anthropic Direct**, **OpenAI Direct**, **Google Gemini Direct**, **Groq Cloud**, and **Deepgram**.
+- **Supported Providers**: **OpenRouter**, **Anthropic Direct**, **OpenAI Direct** and **Groq Cloud**. Speech-to-text runs on this Mac or on Groq.
 - **Burn Session** does not touch this file. **Reset Settings** restores the default settings but keeps your API keys.
 
 #### Editing, Backing Up, and Moving Keys
@@ -284,7 +299,7 @@ The file works like `~/.aws/credentials` or `~/.npmrc`:
 
 #### Upgrading from the Keychain Build
 - Keys saved in the old Keychain were **not** migrated. Re-enter them once in **Settings → Keys**.
-- Optionally, delete the old entries. Repeat for each provider (`openrouter`, `anthropic`, `openai`, `gemini`, `groq`, `deepgram`):
+- Optionally, delete the old entries. Repeat for each provider (`openrouter`, `anthropic`, `openai`, `groq`):
 
 ```bash
 security delete-generic-password -s com.sidekick.credentials -a openrouter
@@ -409,7 +424,7 @@ sidekick/
 │   │   └── settings/               # SettingsDrawer, ApiKeyInputs, ProfileEditor
 │   ├── hooks/                      # useDeepSolver, useLiveOptions, useHitRegions, usePresence, useTheme
 │   ├── lib/                        # Typed IPC bindings (ipc.ts) and classname utils (utils.ts)
-│   ├── services/ai/                # LLM clients (Anthropic, OpenAI, Gemini, OpenRouter, Groq)
+│   ├── services/ai/                # LLM clients (Anthropic, OpenAI, OpenRouter, Groq) and the thinking rules (reasoning.ts)
 │   ├── store/                      # Zustand stores (appStore, sessionStore, settingsStore)
 │   ├── App.tsx                     # Top-level shell: hooks, event listeners, and the HUD
 │   ├── index.css                   # Theme tokens (dark and light), sk-* component classes, motion
@@ -554,7 +569,7 @@ sidekick/
 | `capture_active_window() -> Result<WindowCaptureResponse, String>` | Silently captures frontmost active window and returns Base64 PNG. |
 | `start_audio_capture(config: Option<AudioCaptureConfig>) -> Result<(), String>` | Async; starts dual-channel `ScreenCaptureKit` and microphone capture off the main thread. Called only when the user clicks **Start**; a second call while capturing is a no-op. |
 | `stop_audio_capture() -> Result<(), String>` | Async; stops both streams off the main thread and emits a final zero `audio_level`. Called when the user clicks **Stop**. |
-| `set_stt_engine(engine: String) -> Result<(), String>` | Switches STT engine (`"whisper_local"`, `"groq"`, `"deepgram"`). |
+| `set_stt_engine(engine: String) -> Result<(), String>` | Switches STT engine (`"whisper_local"`, `"groq"`). |
 | `download_stt_model(model_name: String) -> Result<(), String>` | Streams GGML weights from Hugging Face repository into local models dir. |
 | `store_api_key(provider: String, key: String) -> Result<(), String>` | Saves or updates an API key in `config.json`. An empty key deletes it. `provider` must be 1–32 characters of `a-z`, `0-9`, `_` or `-`. |
 | `retrieve_api_key(provider: String) -> Result<String, String>` | Reads an API key from `config.json`. Returns `""` when absent. |
@@ -572,7 +587,7 @@ sidekick/
 | `sidekick://toggle_layout_mode` | `{"layout_mode": String}` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> toggles compact view. |
 | `sidekick://active_window_captured`| `WindowCaptureResponse` | Emitted when <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> captures a window. |
 | `sidekick://stt_chunk` | `{"id": String, "speaker": "interviewer"\|"candidate", "text": String, "is_final": bool}` | Emitted when an audio turn is transcribed. Never carries invented text. |
-| `sidekick://stt_error` | `{"message": String, "engine": "groq"\|"deepgram"\|"whisper_local", "recovered": bool, "timestamp": u64}` | Emitted when a turn couldn't be transcribed, or (`recovered: true`) when a cloud failure was covered by the local model. The same message is sent at most once per 10 s. Shown in the caption. |
+| `sidekick://stt_error` | `{"message": String, "engine": "groq"\|"whisper_local", "recovered": bool, "timestamp": u64}` | Emitted when a turn couldn't be transcribed, or (`recovered: true`) when a cloud failure was covered by the local model. The same message is sent at most once per 10 s. Shown in the caption. |
 | `sidekick://audio_level` | `{"interviewer": f32, "candidate": f32}` | Live level per source, 0–1, at most every 100 ms while capturing. Drives the level dots. |
 | `sidekick://pick_option` | `{"index": 0\|1\|2}` | Emitted by <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd>; the frontend answers that live option. |
 | `sidekick://session_burned` | `{"burned": true, "timestamp": u64}` | Emitted when session database and memory buffers are purged. |

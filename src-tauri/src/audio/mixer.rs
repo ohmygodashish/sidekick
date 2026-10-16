@@ -3,7 +3,7 @@
 //! Implements:
 //! - Speaker diarization channels: Channel 0 (Interviewer / SCK) and Channel 1 (Candidate / Mic) (REQ-008).
 //! - Linear resampling and downmixing to standard 16kHz mono PCM float32 for STT (Whisper).
-//! - RMS energy calculation and VAD with 1.1s turn silence threshold (REQ-007, AC-004).
+//! - RMS energy calculation and VAD with 0.8s turn silence threshold (REQ-007, AC-004).
 //! - Ephemeral in-memory ring buffering with zero persistent disk storage (SEC-003).
 //! - Immediate buffer flush and purge for panic killswitch (REQ-004).
 
@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 /// Standard sample rate required by speech-to-text models (Whisper / Metal STT)
 pub const TARGET_SAMPLE_RATE: u32 = 16000;
 
-/// Default turn silence threshold in seconds according to AC-004 / REQ-008
-pub const DEFAULT_TURN_SILENCE_SECS: f32 = 1.1;
+/// Default turn silence threshold in seconds (AC-004 / REQ-008). Cut from 1.1 s for answer latency (plan Phase 5)
+pub const DEFAULT_TURN_SILENCE_SECS: f32 = 0.8;
 
 /// Default RMS threshold distinguishing speech from background room noise (~ -36.5 dBFS)
 pub const DEFAULT_RMS_THRESHOLD: f32 = 0.015;
@@ -278,7 +278,7 @@ impl ChannelVad {
             let speech_secs = self.speech_samples_count as f32 / self.sample_rate as f32;
 
             if silence_secs >= self.config.silence_threshold_secs {
-                // 1.1s turn silence threshold reached!
+                // Turn silence threshold reached
                 if speech_secs >= self.config.min_speech_secs {
                     let chunk = self.finalize_turn(current_time_ms);
                     self.reset_turn();
@@ -555,10 +555,10 @@ mod tests {
     }
 
     #[test]
-    fn test_vad_turn_silence_1_1s_detection() {
+    fn test_vad_turn_silence_detection() {
         let config = VadConfig {
             threshold: 0.05,
-            silence_threshold_secs: 1.1,
+            silence_threshold_secs: DEFAULT_TURN_SILENCE_SECS,
             min_speech_secs: 0.3,
             max_turn_secs: 15.0,
             pre_roll_secs: 0.1,
@@ -578,15 +578,15 @@ mod tests {
         }
         assert!(vad.is_speaking());
 
-        // 2. Push 0.8 seconds of silence (8 * 1600 samples) -> under 1.1s threshold
+        // 2. Push 0.5 seconds of silence (5 * 1600 samples) -> under the 0.8s threshold
         let silence_chunk = vec![0.0f32; 1600];
-        for _ in 0..8 {
+        for _ in 0..5 {
             let res = vad.push_samples(&silence_chunk);
-            assert!(res.is_none(), "Silence is under 1.1s, turn should remain open");
+            assert!(res.is_none(), "Silence is under 0.8s, turn should remain open");
         }
         assert!(vad.is_speaking());
 
-        // 3. Push remaining silence to exceed 1.1s (0.4s more = 4 slices = total 1.2s silence)
+        // 3. Push more silence until the threshold is reached (completes on the 8th slice, 0.8s)
         let mut completed_chunk = None;
         for _ in 0..4 {
             if let Some(chunk) = vad.push_samples(&silence_chunk) {
@@ -595,7 +595,7 @@ mod tests {
             }
         }
 
-        assert!(completed_chunk.is_some(), "Turn should complete after 1.1s of silence");
+        assert!(completed_chunk.is_some(), "Turn should complete after 0.8s of silence");
         let chunk = completed_chunk.unwrap();
         assert_eq!(chunk.channel, Channel::Interviewer);
         assert!(chunk.is_speech);
@@ -607,7 +607,7 @@ mod tests {
     fn test_vad_channel_segregation() {
         let config = VadConfig {
             threshold: 0.05,
-            silence_threshold_secs: 1.1,
+            silence_threshold_secs: DEFAULT_TURN_SILENCE_SECS,
             min_speech_secs: 0.3,
             max_turn_secs: 15.0,
             pre_roll_secs: 0.1,
@@ -647,7 +647,7 @@ mod tests {
     fn test_vad_filters_brief_transient_click() {
         let config = VadConfig {
             threshold: 0.05,
-            silence_threshold_secs: 1.1,
+            silence_threshold_secs: DEFAULT_TURN_SILENCE_SECS,
             min_speech_secs: 0.4,
             max_turn_secs: 15.0,
             pre_roll_secs: 0.1,

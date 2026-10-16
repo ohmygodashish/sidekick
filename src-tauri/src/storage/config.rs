@@ -83,8 +83,25 @@ fn ensure_private_dir(dir: &Path) -> Result<(), String> {
     restrict_mode(dir, 0o700)
 }
 
+/// Providers the app no longer calls; their saved keys are dropped on load
+const RETIRED_PROVIDERS: [&str; 2] = ["deepgram", "gemini"];
+
+/// Removes retired providers' keys from `apiKeys`. Returns true when any were removed.
+fn drop_retired_keys(config: &mut Map<String, Value>) -> bool {
+    let Some(keys) = config.get_mut("apiKeys").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut removed = false;
+    for provider in RETIRED_PROVIDERS {
+        removed |= keys.remove(provider).is_some();
+    }
+    removed
+}
+
 /// Reads the config. A missing file is `{}`. A file that is not a JSON object is moved aside
 /// to `config.json.corrupt-<unix seconds>` so nothing the user wrote is lost.
+/// Saved keys for retired providers are removed from the returned map and the file is rewritten
+/// best-effort: a failed rewrite is logged and retried on the next read, never failing the read.
 fn read_config(path: &Path) -> Result<Map<String, Value>, String> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -92,7 +109,14 @@ fn read_config(path: &Path) -> Result<Map<String, Value>, String> {
         Err(e) => return Err(io_err("read", path, e)),
     };
     match serde_json::from_slice::<Value>(&bytes) {
-        Ok(Value::Object(map)) => Ok(map),
+        Ok(Value::Object(mut map)) => {
+            if drop_retired_keys(&mut map) {
+                if let Err(e) = write_config(path, &map) {
+                    eprintln!("[Sidekick config] could not remove retired provider keys: {e}");
+                }
+            }
+            Ok(map)
+        }
         _ => {
             quarantine(path)?;
             Ok(Map::new())
@@ -283,9 +307,48 @@ mod tests {
     fn missing_provider_and_missing_file_return_empty() {
         let td = TempRoot::new();
         let path = td.config();
-        assert_eq!(retrieve_api_key_at(&path, "deepgram").unwrap(), "");
+        assert_eq!(retrieve_api_key_at(&path, "openai").unwrap(), "");
         store_api_key_at(&path, "groq", "gsk_1").unwrap();
+        assert_eq!(retrieve_api_key_at(&path, "openai").unwrap(), "");
+    }
+
+    #[test]
+    fn retired_provider_keys_are_dropped_on_load() {
+        let td = TempRoot::new();
+        let path = td.config();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"apiKeys":{"deepgram":"dg_1","gemini":"AIza_1","groq":"gsk_1"},"settings":{"version":0}}"#,
+        )
+        .unwrap();
+
         assert_eq!(retrieve_api_key_at(&path, "deepgram").unwrap(), "");
+        let json = read_json(&path);
+        assert!(json["apiKeys"].get("deepgram").is_none());
+        assert!(json["apiKeys"].get("gemini").is_none());
+        assert_eq!(json["apiKeys"]["groq"], "gsk_1");
+        assert_eq!(json["settings"]["version"], 0);
+    }
+
+    #[test]
+    fn retired_key_purge_survives_failed_rewrite() {
+        let td = TempRoot::new();
+        let path = td.config();
+        let dir = path.parent().unwrap().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, r#"{"apiKeys":{"deepgram":"dg_1","groq":"gsk_1"}}"#).unwrap();
+        // A directory at the temp-file path makes every rewrite fail
+        let blocker = dir.join("config.json.tmp");
+        fs::create_dir(&blocker).unwrap();
+
+        assert_eq!(retrieve_api_key_at(&path, "groq").unwrap(), "gsk_1");
+        assert_eq!(retrieve_api_key_at(&path, "deepgram").unwrap(), "");
+        assert_eq!(read_json(&path)["apiKeys"]["deepgram"], "dg_1", "a failed rewrite leaves the file unchanged");
+
+        fs::remove_dir(&blocker).unwrap();
+        assert_eq!(retrieve_api_key_at(&path, "groq").unwrap(), "gsk_1");
+        assert!(read_json(&path)["apiKeys"].get("deepgram").is_none());
     }
 
     #[test]

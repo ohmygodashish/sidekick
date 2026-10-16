@@ -7,17 +7,18 @@ import {
   ASSIST_LABEL,
   ASSIST_TASK,
   Exchange,
-  buildSystemPrompt,
   buildUserPrompt,
+  currentSystemParts,
   solutionToText,
 } from "../services/ai/promptTemplates";
 import {
   dispatchDeepSolve,
   getDefaultModelForProvider,
   mimeTypeOfDataUrl,
+  reasoningFor,
 } from "../services/ai/dispatcher";
 import { assistTurns, formatTranscript, formatTurns } from "../services/ai/liveOptions";
-import { resolveMode } from "../services/ai/modes";
+import { initPrefetch, takePrefetch } from "./prefetch";
 
 type SolveOptions = Omit<SolveRequest, "question">;
 
@@ -83,6 +84,12 @@ export function useDeepSolver() {
       cancelSolve();
 
       const kind: MessageKind = solveOptions?.kind ?? "typed";
+      // A pick takes the prefetched answer to its question, when the screen is off for it. A retry reruns in place
+      const prefetch =
+        kind === "option" && !solveOptions?.retryMessageId && !useSessionStore.getState().optionsUseScreen
+          ? takePrefetch(questionText)
+          : null;
+
       const begun = useSessionStore.getState().beginMessage({
         question: kind === "assist" ? ASSIST_LABEL : questionText,
         kind,
@@ -94,11 +101,27 @@ export function useDeepSolver() {
       const updateMessage = (patch: MessagePatch) =>
         useSessionStore.getState().updateMessage(threadId, messageId, patch);
 
-      const controller = new AbortController();
+      // A finished prefetch is the answer already: no request
+      if (prefetch?.status === "done") {
+        updateMessage({ solution: prefetch.solution });
+        return;
+      }
+
+      // An adopted prefetch is the in-flight solve from here on, so the abort paths below stop it too
+      const controller = prefetch?.controller ?? new AbortController();
       inFlightRef.current = { controller, threadId, messageId };
       setSolving(messageId);
 
       try {
+        if (prefetch) {
+          // Still running: it streams into this message from wherever it has got to
+          prefetch.onUpdate = (solution) => updateMessage({ solution });
+          if (prefetch.solution) updateMessage({ solution: prefetch.solution });
+          const solution = await prefetch.finished;
+          if (!controller.signal.aborted) updateMessage({ solution });
+          return;
+        }
+
         // 1. Silent active window capture (REQ-013, AC-003), started first. A failed capture just means no
         //    screenshot; the prompt parts below are built while it runs
         const shouldCapture = solveOptions?.captureWindow ?? true;
@@ -111,10 +134,7 @@ export function useDeepSolver() {
         const model = settings.selectedModel || getDefaultModelForProvider(provider);
 
         // 3. Assemble personalized prompts (REQ-016); earlier answers of the thread are the follow-up context
-        const systemPrompt = buildSystemPrompt(settings.profile, {
-          modeInstructions: resolveMode(settings.activeModeId, settings.modes).instructions,
-          outputLanguage: settings.outputLanguage,
-        });
+        const { prefix: systemPrefix, suffix: systemSuffix } = currentSystemParts(settings);
         const history: Exchange[] = begun.before.flatMap((m) =>
           m.solution ? [{ question: m.question, answer: solutionToText(m.solution) }] : []
         );
@@ -136,7 +156,9 @@ export function useDeepSolver() {
           apiKey,
           model,
           prompt,
-          systemPrompt,
+          systemPrefix,
+          systemSuffix,
+          reasoning: reasoningFor(kind, settings),
           imageBase64,
           imageMimeType: imageBase64 ? mimeTypeOfDataUrl(imageBase64) : undefined,
           questionId: messageId,
@@ -204,4 +226,7 @@ export function useDeepSolver() {
 
   // Unmount: stop whatever is still streaming
   useEffect(() => cancelSolve, [cancelSolve]);
+
+  // The slot-1 prefetch follows the asked question (hooks/prefetch.ts)
+  useEffect(() => initPrefetch(), []);
 }

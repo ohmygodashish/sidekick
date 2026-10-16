@@ -21,11 +21,6 @@ import {
   cleanBase64Data,
 } from "../services/ai/openrouter";
 import {
-  buildGeminiPayload,
-  getGeminiModel,
-  streamGemini,
-} from "../services/ai/gemini";
-import {
   parseProgressiveStream,
   readSSEStream,
 } from "../services/ai/streamParser";
@@ -137,9 +132,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
         openrouter: "",
         anthropic: "",
         openai: "",
-        gemini: "",
         groq: "",
-        deepgram: "",
       },
       profile: {
         resumeText: "",
@@ -278,7 +271,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
 
       const gpt5 = buildOpenAIPayload({ apiKey: "sk-test", model: "openai/gpt-5.6-luna", prompt: "Two sum", onChunk: vi.fn() });
       expect(gpt5.model).toBe("gpt-5.6-luna");
-      expect(gpt5.max_completion_tokens).toBe(4096);
+      expect(gpt5.max_completion_tokens).toBe(16000);
       expect(gpt5.temperature).toBeUndefined();
       expect(gpt5.max_tokens).toBeUndefined();
     });
@@ -320,23 +313,6 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
       expect(payload.messages[1].content[1].type).toBe("image_url");
     });
 
-    it("builds Google Gemini payload with inlineData vision format", () => {
-      const payload = buildGeminiPayload({
-        apiKey: "gemini-test-key",
-        model: "google/gemini-2.0-flash",
-        prompt: "Implement LRU Cache",
-        systemPrompt: "Gemini system prompt",
-        imageBase64: sampleBase64,
-        onChunk: vi.fn(),
-      });
-
-      expect(payload.systemInstruction.parts[0].text).toBe("Gemini system prompt");
-      const parts = payload.contents[0].parts;
-      expect(parts[0].inlineData.mimeType).toBe("image/png");
-      expect(parts[0].inlineData.data).not.toContain("data:image/png;base64,");
-      expect(parts[1].text).toBe("Implement LRU Cache");
-      expect(getGeminiModel("google/gemini-2.0-flash")).toBe("gemini-2.0-flash");
-    });
   });
 
   describe("3. Progressive Streaming Parser (REQ-015, AC-006)", () => {
@@ -530,23 +506,6 @@ Space Complexity: O(C) capacity
       expect(result).toBe("OpenAI chunk");
     });
 
-    it("streamGemini parses candidates text parts", async () => {
-      const mockSSE = [
-        'data: {"candidates": [{"content": {"parts": [{"text": "Gemini chunk"}]}}]}\n\n',
-      ].join("");
-
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(mockSSE));
-
-      const chunks: string[] = [];
-      const result = await streamGemini({
-        apiKey: "gemini-key",
-        prompt: "test",
-        onChunk: (chunk) => chunks.push(chunk),
-      });
-
-      expect(chunks).toEqual(["Gemini chunk"]);
-      expect(result).toBe("Gemini chunk");
-    });
   });
 
   describe("5. Unified Dispatcher (dispatcher.ts)", () => {
@@ -554,7 +513,6 @@ Space Complexity: O(C) capacity
       expect(getDefaultModelForProvider("openrouter")).toBe("anthropic/claude-haiku-5.5");
       expect(getDefaultModelForProvider("anthropic")).toBe("claude-haiku-5-5");
       expect(getDefaultModelForProvider("openai")).toBe("gpt-5.6-luna");
-      expect(getDefaultModelForProvider("gemini")).toBe("gemini-3.8-flash");
       expect(getDefaultModelForProvider("groq")).toBe("openai/gpt-oss-120b");
     });
 
@@ -570,6 +528,7 @@ Space Complexity: O(C) capacity
         provider: "groq",
         apiKey: "gsk_test123",
         prompt: "Explain event loops",
+        reasoning: "none",
       });
 
       expect(fetchSpy).toHaveBeenCalledWith(

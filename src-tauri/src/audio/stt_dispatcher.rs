@@ -7,7 +7,6 @@
 //! To the active STT engine:
 //! - `whisper_local`: On-device Metal-accelerated Whisper (100% offline, AC-005)
 //! - `groq`: Cloud Groq Whisper-large-v3 (<250ms latency)
-//! - `deepgram`: Cloud Deepgram Nova-2 streaming
 //!
 //! Emits transcribed turns to frontend via Tauri event `sidekick://stt_chunk`:
 //! ```json
@@ -61,8 +60,6 @@ pub enum SttEngineType {
     WhisperLocal,
     /// Groq Whisper-large-v3 cloud inference
     Groq,
-    /// Deepgram Nova-2 cloud inference
-    Deepgram,
 }
 
 impl SttEngineType {
@@ -71,7 +68,6 @@ impl SttEngineType {
         match self {
             Self::WhisperLocal => "whisper_local",
             Self::Groq => "groq",
-            Self::Deepgram => "deepgram",
         }
     }
 
@@ -80,7 +76,6 @@ impl SttEngineType {
         match self {
             Self::WhisperLocal => "Embedded Whisper (Local Metal)",
             Self::Groq => "Groq Whisper-large-v3 Cloud",
-            Self::Deepgram => "Deepgram Nova-2 Cloud",
         }
     }
 }
@@ -92,9 +87,8 @@ impl FromStr for SttEngineType {
         match s.trim().to_lowercase().as_str() {
             "whisper_local" | "whisper" | "local" | "whisper-local" => Ok(Self::WhisperLocal),
             "groq" | "groq_whisper" | "groq-whisper" => Ok(Self::Groq),
-            "deepgram" | "deepgram_nova" | "deepgram-nova" => Ok(Self::Deepgram),
             other => Err(format!(
-                "Invalid STT engine '{other}'. Supported engines: 'whisper_local', 'groq', 'deepgram'"
+                "Invalid STT engine '{other}'. Supported engines: 'whisper_local', 'groq'"
             )),
         }
     }
@@ -172,7 +166,6 @@ enum CloudError {
 fn cloud_failure_message(engine: SttEngineType, err: &CloudError, recovered: bool) -> String {
     let name = match engine {
         SttEngineType::Groq => "Groq",
-        SttEngineType::Deepgram => "Deepgram",
         SttEngineType::WhisperLocal => "Local Whisper",
     };
     match err {
@@ -369,10 +362,7 @@ impl SttDispatcher {
         let language = self.local_whisper.language();
         let result = match cloud_api_key(engine) {
             None => Err(CloudError::MissingKey),
-            Some(key) if engine == SttEngineType::Groq => {
-                call_groq_whisper_api(&key, &chunk.samples, chunk.sample_rate, &language)
-            }
-            Some(key) => call_deepgram_api(&key, &chunk.samples, chunk.sample_rate, &language),
+            Some(key) => call_groq_whisper_api(&key, &chunk.samples, chunk.sample_rate, &language),
         };
         let err = match result {
             Ok(text) => return (text, None),
@@ -395,7 +385,6 @@ impl SttDispatcher {
 fn cloud_api_key(engine: SttEngineType) -> Option<String> {
     let provider = match engine {
         SttEngineType::Groq => "groq",
-        SttEngineType::Deepgram => "deepgram",
         SttEngineType::WhisperLocal => return None,
     };
     crate::storage::config::retrieve_api_key(provider)
@@ -433,16 +422,6 @@ fn status_failure(status: reqwest::StatusCode) -> CloudError {
 /// Groq's optional `language` field: omitted for "auto" so Groq detects the language
 fn groq_language_field(language: &str) -> Option<&str> {
     (language != "auto").then_some(language)
-}
-
-/// Deepgram's listen URL: a `language` code, or language detection for "auto"
-fn deepgram_listen_url(language: &str) -> String {
-    const BASE: &str = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true";
-    if language == "auto" {
-        format!("{BASE}&detect_language=true")
-    } else {
-        format!("{BASE}&language={language}")
-    }
 }
 
 /// Helper to call Groq Whisper API for low-latency cloud transcription
@@ -487,59 +466,6 @@ fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32, langu
     .map_err(|_| CloudError::Failed("bad response".to_string()))?;
 
     Ok(parsed.text.trim().to_string())
-}
-
-/// Helper to call Deepgram Nova-2 API for cloud speech transcription
-fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32, language: &str) -> Result<String, CloudError> {
-    let wav_bytes = encode_wav_pcm16(samples, sample_rate);
-    let client = cloud_client()?;
-
-    let response = tauri::async_runtime::block_on(async {
-        client
-            .post(deepgram_listen_url(language))
-            .header("Authorization", format!("Token {api_key}"))
-            .header("Content-Type", "audio/wav")
-            .body(wav_bytes)
-            .send()
-            .await
-    })
-    .map_err(http_failure)?;
-
-    if !response.status().is_success() {
-        return Err(status_failure(response.status()));
-    }
-
-    #[derive(Deserialize)]
-    struct DeepgramAlternative {
-        transcript: String,
-    }
-    #[derive(Deserialize)]
-    struct DeepgramChannel {
-        alternatives: Vec<DeepgramAlternative>,
-    }
-    #[derive(Deserialize)]
-    struct DeepgramResults {
-        channels: Vec<DeepgramChannel>,
-    }
-    #[derive(Deserialize)]
-    struct DeepgramResponse {
-        results: DeepgramResults,
-    }
-
-    let parsed: DeepgramResponse = tauri::async_runtime::block_on(async {
-        response.json().await
-    })
-    .map_err(|_| CloudError::Failed("bad response".to_string()))?;
-
-    let transcript = parsed
-        .results
-        .channels
-        .first()
-        .and_then(|ch| ch.alternatives.first())
-        .map(|alt| alt.transcript.trim().to_string())
-        .unwrap_or_default();
-
-    Ok(transcript)
 }
 
 /// Item passed through the asynchronous STT worker queue
@@ -643,14 +569,11 @@ mod tests {
             SttEngineType::Groq
         );
         assert_eq!(
-            SttEngineType::from_str("deepgram").unwrap(),
-            SttEngineType::Deepgram
-        );
-        assert_eq!(
             SttEngineType::from_str("local").unwrap(),
             SttEngineType::WhisperLocal
         );
         assert!(SttEngineType::from_str("invalid_engine").is_err());
+        assert!(SttEngineType::from_str("deepgram").is_err());
     }
 
     #[test]
@@ -734,10 +657,6 @@ mod tests {
             "Add your Groq API key in Settings → Keys to transcribe."
         );
         assert_eq!(
-            cloud_failure_message(SttEngineType::Deepgram, &MissingKey, false),
-            "Add your Deepgram API key in Settings → Keys to transcribe."
-        );
-        assert_eq!(
             cloud_failure_message(SttEngineType::Groq, &Rejected, true),
             "Groq rejected the API key."
         );
@@ -780,9 +699,8 @@ mod tests {
         assert_eq!(active, "groq");
         assert_eq!(dispatcher.get_engine(), SttEngineType::Groq);
 
-        let active2 = dispatcher.set_engine("deepgram").unwrap();
-        assert_eq!(active2, "deepgram");
-        assert_eq!(dispatcher.get_engine(), SttEngineType::Deepgram);
+        assert!(dispatcher.set_engine("deepgram").is_err());
+        assert_eq!(dispatcher.get_engine(), SttEngineType::Groq, "a rejected engine changes nothing");
 
         let active3 = dispatcher.set_engine("whisper_local").unwrap();
         assert_eq!(active3, "whisper_local");
@@ -804,18 +722,6 @@ mod tests {
         assert_eq!(groq_language_field("auto"), None);
         assert_eq!(groq_language_field("hi"), Some("hi"));
         assert_eq!(groq_language_field("en"), Some("en"));
-    }
-
-    #[test]
-    fn test_deepgram_listen_url_language_suffix() {
-        assert_eq!(
-            deepgram_listen_url("auto"),
-            "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&detect_language=true"
-        );
-        assert_eq!(
-            deepgram_listen_url("ja"),
-            "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=ja"
-        );
     }
 
     #[test]

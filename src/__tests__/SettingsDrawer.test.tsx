@@ -193,6 +193,17 @@ describe("SettingsDrawer", () => {
       expect(spyInvoke).not.toHaveBeenCalled();
     });
 
+    it("offers the four answer providers and keys for them only", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      const options = within(screen.getByLabelText("Primary provider"))
+        .getAllByRole("option")
+        .map((option) => option.textContent);
+      expect(options).toEqual(["OpenRouter", "Anthropic", "OpenAI", "Groq"]);
+      expect(screen.queryByLabelText("Google Gemini API key")).toBeNull();
+      expect(screen.queryByLabelText("Deepgram API key")).toBeNull();
+    });
+
     it("reports an empty key as required", () => {
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
       fireEvent.click(within(providerRow("Groq")).getByRole("button", { name: "Check format" }));
@@ -232,6 +243,125 @@ describe("SettingsDrawer", () => {
         target: { value: "groq/some-model" },
       });
       expect(useSettingsStore.getState().evaluatorModel).toBe("groq/some-model");
+    });
+  });
+
+  describe("answer thinking", () => {
+    const thinkingSwitch = () => screen.getByRole("switch", { name: "Think before answering" });
+    const pickSwitch = () => screen.getByRole("switch", { name: "Also think for picked options" });
+    const levelGroup = () => screen.getByRole("radiogroup", { name: "Thinking level" });
+
+    it("is on at Medium by default, with the picks switch off beneath it", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      expect(thinkingSwitch().tagName).toBe("BUTTON");
+      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(document.getElementById("answer-thinking-help")?.textContent).toBe("Typed questions and ⌘↵ Assist.");
+      expect(within(levelGroup()).getByRole("radio", { name: "Medium" }).getAttribute("aria-checked")).toBe("true");
+      expect(pickSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("hides the level and the picks switch when thinking is off, and shows them again", async () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      fireEvent.click(thinkingSwitch());
+      expect(useSettingsStore.getState().answerThinking).toBe(false);
+      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("false");
+      // The two leave after their short fade
+      await waitFor(() => expect(screen.queryByRole("switch", { name: "Also think for picked options" })).toBeNull());
+      expect(screen.queryByRole("radiogroup", { name: "Thinking level" })).toBeNull();
+
+      fireEvent.click(thinkingSwitch());
+      expect(levelGroup()).toBeDefined();
+      expect(pickSwitch()).toBeDefined();
+    });
+
+    it("turns the picks switch on and sets the level, without moving focus", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+      thinkingSwitch().focus();
+
+      fireEvent.click(pickSwitch());
+      expect(useSettingsStore.getState().pickThinking).toBe(true);
+      expect(pickSwitch().getAttribute("aria-checked")).toBe("true");
+
+      fireEvent.click(within(levelGroup()).getByRole("radio", { name: "High" }));
+      expect(useSettingsStore.getState().answerThinkingLevel).toBe("high");
+      expect(within(levelGroup()).getByRole("radio", { name: "High" }).getAttribute("aria-checked")).toBe("true");
+      expect(document.activeElement).toBe(thinkingSwitch());
+    });
+
+    it("moves the level with the arrow keys and wraps around", () => {
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      fireEvent.keyDown(within(levelGroup()).getByRole("radio", { name: "Medium" }), { key: "ArrowRight" });
+      expect(useSettingsStore.getState().answerThinkingLevel).toBe("high");
+      expect(document.activeElement).toBe(within(levelGroup()).getByRole("radio", { name: "High" }));
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowRight" });
+      expect(useSettingsStore.getState().answerThinkingLevel).toBe("low");
+
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowLeft" });
+      expect(useSettingsStore.getState().answerThinkingLevel).toBe("high");
+    });
+
+    it("shows the switches off and greys them out for a provider without thinking settings, and explains why", () => {
+      // Stored as on, but the model takes no setting, so the switch must not look on
+      useSettingsStore.setState({ selectedProvider: "groq", selectedModel: "openai/gpt-oss-120b" });
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("false");
+      expect(pickSwitch().getAttribute("aria-checked")).toBe("false");
+      for (const control of [thinkingSwitch(), pickSwitch()]) {
+        expect(control.getAttribute("aria-disabled")).toBe("true");
+        // Not a native disabled button: it stays focusable, so the note can be reached
+        expect((control as HTMLButtonElement).disabled).toBe(false);
+      }
+      expect(document.getElementById("answer-thinking-note")?.textContent).toBe(
+        "Thinking settings apply to Claude and OpenAI models."
+      );
+      expect(thinkingSwitch().getAttribute("aria-describedby")).toBe("answer-thinking-help answer-thinking-note");
+      expect(pickSwitch().getAttribute("aria-describedby")).toBe("pick-thinking-help answer-thinking-note");
+      expect(within(levelGroup()).getByRole("radio", { name: "High" }).getAttribute("aria-disabled")).toBe("true");
+
+      thinkingSwitch().focus();
+      expect(document.activeElement).toBe(thinkingSwitch());
+      // A click, a level click or an arrow key changes nothing
+      fireEvent.click(thinkingSwitch());
+      fireEvent.click(within(levelGroup()).getByRole("radio", { name: "High" }));
+      fireEvent.keyDown(within(levelGroup()).getByRole("radio", { name: "Medium" }), { key: "ArrowRight" });
+      expect(useSettingsStore.getState()).toMatchObject({
+        answerThinking: true,
+        answerThinkingLevel: "medium",
+        pickThinking: false,
+      });
+    });
+
+    it("enables the switches for an OpenAI model that can turn thinking off, with no note", () => {
+      useSettingsStore.setState({ selectedProvider: "openai", selectedModel: "gpt-5.6-luna" });
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      expect((thinkingSwitch() as HTMLButtonElement).disabled).toBe(false);
+      expect(thinkingSwitch().getAttribute("aria-disabled")).toBe("false");
+      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(thinkingSwitch().getAttribute("aria-describedby")).toBe("answer-thinking-help");
+      expect(screen.queryByText("Thinking settings apply to Claude and OpenAI models.")).toBeNull();
+      expect(screen.queryByText("This model always thinks; off uses its default level.")).toBeNull();
+    });
+
+    it("keeps the switches on and notes that a model which always thinks uses its default for off", () => {
+      useSettingsStore.setState({ selectedProvider: "anthropic", selectedModel: "claude-opus-5-5" });
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      expect((thinkingSwitch() as HTMLButtonElement).disabled).toBe(false);
+      expect(thinkingSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(document.getElementById("answer-thinking-note")?.textContent).toBe(
+        "This model always thinks; off uses its default level."
+      );
+      // The picks help says the same, in place of "Off is fastest"
+      expect(document.getElementById("pick-thinking-help")?.textContent).toBe(
+        "Option picks and the background answer for the asked question. This model always thinks; off uses its default level."
+      );
+      expect(screen.queryByText("Thinking settings apply to Claude and OpenAI models.")).toBeNull();
     });
   });
 
@@ -371,11 +501,17 @@ describe("SettingsDrawer", () => {
       expect(useSettingsStore.getState().sttMode).toBe("groq");
       expect(screen.getByRole("radio", { name: /Groq cloud/ }).getAttribute("aria-checked")).toBe("true");
 
-      fireEvent.click(screen.getByRole("radio", { name: /Deepgram streaming/ }));
-      expect(useSettingsStore.getState().sttMode).toBe("deepgram");
+      expect(screen.queryByRole("radio", { name: /Deepgram/ })).toBeNull();
 
       fireEvent.click(screen.getByRole("radio", { name: /On this Mac/ }));
       expect(useSettingsStore.getState().sttMode).toBe("whisper_local");
+    });
+
+    it("asks for a Groq key when Groq is the engine and no key is set", () => {
+      useSettingsStore.setState({ sttMode: "groq", apiKeys: { ...useSettingsStore.getState().apiKeys, groq: "" } });
+      render(<SettingsDrawer isOpen={true} defaultTab="audio" />);
+
+      expect(screen.getByText("Add a Groq key on the API keys tab to use this engine.")).toBeDefined();
     });
 
     it("shows a failure message when the model download fails", async () => {

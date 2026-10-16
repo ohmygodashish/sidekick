@@ -98,16 +98,20 @@ export async function fetchLiveOptions(
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
+    const model = (request.model || DEFAULT_MODEL).replace(/^groq\//, "");
     const res = await fetch(request.endpoint ?? GROQ_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: (request.model || DEFAULT_MODEL).replace(/^groq\//, ""),
+        model,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: `<transcript>\n${formatTranscript(turns)}\n</transcript>` },
         ],
         response_format: { type: "json_object" },
+        // Qwen in instruct mode: no thinking, so the options come back fast. Other Groq models
+        // (e.g. gpt-oss) reject "none", so they keep their default.
+        ...(/qwen/i.test(model) ? { reasoning_effort: "none" } : {}),
         temperature: 0.3,
         max_tokens: 400,
       }),

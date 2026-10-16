@@ -1,6 +1,7 @@
 import { readSSEStream } from "./streamParser";
 import { assertOk } from "./errors";
-import { cleanBase64Data, ProviderStreamRequest } from "./openrouter";
+import { cleanBase64Data, ProviderStreamRequest, systemText } from "./openrouter";
+import { isOpenAIReasoningModel, sentReasoning } from "./reasoning";
 
 /**
  * Builds OpenAI Chat Completions payload with vision image_url support.
@@ -12,14 +13,16 @@ export function buildOpenAIPayload(request: ProviderStreamRequest) {
     model = model.slice("openai/".length);
   }
 
-  // o-series and GPT-5 models reject temperature and max_tokens
-  const isReasoningModel = /^(o\d|gpt-5)/i.test(model);
+  // GPT-5 and later and o-series models reason: they reject temperature and max_tokens
+  const isReasoningModel = isOpenAIReasoningModel(model);
   const messages: Array<{ role: string; content: any }> = [];
 
-  if (request.systemPrompt) {
+  // One stable string: OpenAI caches the repeated prefix automatically
+  const system = systemText(request);
+  if (system) {
     messages.push({
       role: isReasoningModel ? "developer" : "system",
-      content: request.systemPrompt,
+      content: system,
     });
   }
 
@@ -52,7 +55,10 @@ export function buildOpenAIPayload(request: ProviderStreamRequest) {
   };
 
   if (isReasoningModel) {
-    payload.max_completion_tokens = 4096;
+    // Room for thinking at high effort plus the answer, as for Claude
+    payload.max_completion_tokens = 16000;
+    const thinking = sentReasoning("openai", model, request.reasoning);
+    if (thinking) payload.reasoning_effort = thinking;
   } else {
     payload.temperature = 0.2;
     payload.max_tokens = 4096;

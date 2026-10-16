@@ -9,6 +9,7 @@ import { useDeepSolver } from "./hooks/useDeepSolver";
 import { useTheme } from "./hooks/useTheme";
 import { useFocusRelease } from "./hooks/useFocusRelease";
 import { usePointerHover } from "./hooks/usePointerHover";
+import { useWarmup } from "./hooks/useWarmup";
 import { setSttEngine } from "./lib/ipc";
 import { CODING_MODE_ID } from "./services/ai/modes";
 
@@ -30,6 +31,9 @@ export default function App() {
 
   // Hover styles follow the pointer that Rust reports (WebKit doesn't track it over the overlay)
   usePointerHover();
+
+  // Connections and prompt cache for the answer provider are warmed as Sidekick shows and as a meeting goes live
+  useWarmup();
 
   useEffect(() => {
     syncFromBackend();

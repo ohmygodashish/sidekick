@@ -124,6 +124,8 @@ const newId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
 const cancelSolve = () => window.dispatchEvent(new Event("sidekick:cancel_solve"));
+// The slot-1 prefetch (hooks/prefetch.ts) goes with the chats; a new question or New chat keeps it
+const discardPrefetch = () => window.dispatchEvent(new Event("sidekick:discard_prefetch"));
 
 const hasAnswer = (solution: ProgressiveSolution | null) =>
   Boolean(solution && (solution.stage1Intuition || solution.stage2Code || solution.stage3Analysis));
@@ -240,6 +242,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   clearThreads: () => {
     // Cancel first, so a running answer is stopped while its message still exists
     cancelSolve();
+    discardPrefetch();
     set({ threads: [], activeThreadId: null, solvingMessageId: null, askDraft: "", pickedOption: null });
   },
 

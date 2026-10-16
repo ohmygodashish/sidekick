@@ -6,17 +6,14 @@ import { getDefaultModelForProvider } from "../services/ai/dispatcher";
 import { CODING_MODE_ID, GENERAL_MODE_ID, type CustomMode } from "../services/ai/modes";
 import { useSessionStore } from "./sessionStore";
 
-export type ApiProvider =
-  | "openrouter"
-  | "anthropic"
-  | "openai"
-  | "gemini"
-  | "groq"
-  | "deepgram";
+export type ApiProvider = "openrouter" | "anthropic" | "openai" | "groq";
 
-export type SttMode = "whisper_local" | "deepgram" | "groq";
+export type SttMode = "whisper_local" | "groq";
 
 export type ThemePreference = "system" | "light" | "dark";
+
+/** How hard the answer model thinks when thinking is on (Claude models only). */
+export type ThinkingLevel = "low" | "medium" | "high";
 
 /** Transcription languages; "auto" lets the engine detect the language. */
 export const STT_LANGUAGES = [
@@ -79,6 +76,11 @@ export interface SettingsState {
   activeModeId: string;
   outputLanguage: string;
 
+  // Thinking for answers: typed questions and Assist; option picks and the slot-1 prefetch also need pickThinking
+  answerThinking: boolean;
+  answerThinkingLevel: ThinkingLevel;
+  pickThinking: boolean;
+
   // Appearance
   theme: ThemePreference;
 
@@ -104,6 +106,9 @@ export interface SettingsState {
   deleteMode: (id: string) => void;
   setActiveMode: (id: string) => void;
   setOutputLanguage: (language: string) => void;
+  setAnswerThinking: (on: boolean) => void;
+  setAnswerThinkingLevel: (level: ThinkingLevel) => void;
+  setPickThinking: (on: boolean) => void;
   setTheme: (theme: ThemePreference) => void;
   setIsSettingsOpen: (open: boolean) => void;
   toggleSettings: () => void;
@@ -123,9 +128,7 @@ const defaultState = {
     openrouter: "",
     anthropic: "",
     openai: "",
-    gemini: "",
     groq: "",
-    deepgram: "",
   },
   selectedProvider: "openrouter" as ApiProvider,
   selectedModel: "anthropic/claude-haiku-5.5",
@@ -138,6 +141,9 @@ const defaultState = {
   modes: [] as CustomMode[],
   activeModeId: GENERAL_MODE_ID,
   outputLanguage: "English",
+  answerThinking: true,
+  answerThinkingLevel: "medium" as ThinkingLevel,
+  pickThinking: false,
   theme: "system" as ThemePreference,
   isSettingsOpen: false,
 };
@@ -234,14 +240,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       loadApiKeysFromBackend: async () => {
-        const providers: ApiProvider[] = [
-          "openrouter",
-          "anthropic",
-          "openai",
-          "gemini",
-          "groq",
-          "deepgram",
-        ];
+        const providers: ApiProvider[] = ["openrouter", "anthropic", "openai", "groq"];
         for (const p of providers) {
           const val = await safeInvoke<string>("retrieve_api_key", { provider: p });
           if (val) {
@@ -316,6 +315,9 @@ export const useSettingsStore = create<SettingsState>()(
         set({ activeModeId: id });
       },
       setOutputLanguage: (language) => set({ outputLanguage: language }),
+      setAnswerThinking: (on) => set({ answerThinking: on }),
+      setAnswerThinkingLevel: (level) => set({ answerThinkingLevel: level }),
+      setPickThinking: (on) => set({ pickThinking: on }),
 
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
 
@@ -333,7 +335,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "sidekick-settings",
-      version: 2,
+      version: 4,
       migrate: (persisted, fromVersion) => {
         const state = (persisted ?? {}) as Partial<SettingsState>;
         if (fromVersion < 1) {
@@ -351,6 +353,20 @@ export const useSettingsStore = create<SettingsState>()(
           state.sttLanguage ??= defaultState.sttLanguage;
           state.outputLanguage ??= defaultState.outputLanguage;
           state.micDeviceName ??= defaultState.micDeviceName;
+        }
+        if (fromVersion < 3) {
+          // Thinking starts at its defaults; a choice saved earlier is kept
+          state.answerThinking ??= defaultState.answerThinking;
+          state.answerThinkingLevel ??= defaultState.answerThinkingLevel;
+          state.pickThinking ??= defaultState.pickThinking;
+        }
+        if (fromVersion < 4) {
+          // Deepgram and Gemini are gone: Deepgram speech-to-text moves to Groq, Gemini answers move to OpenRouter
+          if ((state.sttMode as string | undefined) === "deepgram") state.sttMode = "groq";
+          if ((state.selectedProvider as string | undefined) === "gemini") {
+            state.selectedProvider = "openrouter";
+            state.selectedModel = getDefaultModelForProvider("openrouter");
+          }
         }
         return state as SettingsState;
       },

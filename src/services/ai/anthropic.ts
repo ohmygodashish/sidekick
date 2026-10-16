@@ -1,6 +1,43 @@
 import { readSSEStream } from "./streamParser";
 import { assertOk } from "./errors";
-import { cleanBase64Data, ProviderStreamRequest } from "./openrouter";
+import { cleanBase64Data, ProviderStreamRequest, type ReasoningMode } from "./openrouter";
+import { reasoningSupport, sentReasoning } from "./reasoning";
+
+export const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
+
+/** Sonnet 5.5 takes "between_tools" for "none" rather than "disabled". */
+const BETWEEN_TOOLS = /claude-sonnet-5[-.]5/;
+
+export interface ClaudeThinkingParams {
+  max_tokens: number;
+  thinking?: { type: "disabled" | "between_tools" };
+  output_config?: { effort: "low" | "medium" | "high" };
+}
+
+/**
+ * The thinking fields and output room for one Claude model. A model without an effort setting gets neither, so
+ * an unknown id still works. Thinking is left to the model when no reasoning is given, or when the model
+ * can't turn it off.
+ */
+export function claudeThinkingParams(model: string, reasoning?: ReasoningMode): ClaudeThinkingParams {
+  if (!reasoningSupport("anthropic", model).supported) return { max_tokens: 4096 };
+  // Room for thinking at high effort plus the answer
+  const maxTokens = 16000;
+  const thinking = sentReasoning("anthropic", model, reasoning);
+  if (!thinking) return { max_tokens: maxTokens };
+  if (thinking !== "none") return { max_tokens: maxTokens, output_config: { effort: thinking } };
+  if (BETWEEN_TOOLS.test(model)) return { max_tokens: maxTokens, thinking: { type: "between_tools" } };
+  return { max_tokens: maxTokens, thinking: { type: "disabled" } };
+}
+
+export function anthropicHeaders(apiKey: string): Record<string, string> {
+  return {
+    "x-api-key": apiKey.trim(),
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "Content-Type": "application/json",
+  };
+}
 
 /**
  * Builds Anthropic Messages API payload with image content block.
@@ -42,7 +79,6 @@ export function buildAnthropicPayload(request: ProviderStreamRequest) {
 
   const payload: Record<string, any> = {
     model,
-    max_tokens: 4096,
     stream: true,
     messages: [
       {
@@ -50,9 +86,16 @@ export function buildAnthropicPayload(request: ProviderStreamRequest) {
         content: userContent,
       },
     ],
+    ...claudeThinkingParams(model, request.reasoning),
   };
 
-  if (request.systemPrompt) {
+  if (request.systemPrefix) {
+    // The prefix is the cached block (1 hour); the mode and language after it are not cached
+    payload.system = [
+      { type: "text", text: request.systemPrefix, cache_control: { type: "ephemeral", ttl: "1h" } },
+      ...(request.systemSuffix ? [{ type: "text", text: request.systemSuffix }] : []),
+    ];
+  } else if (request.systemPrompt) {
     payload.system = request.systemPrompt;
   }
 
@@ -65,17 +108,12 @@ export function buildAnthropicPayload(request: ProviderStreamRequest) {
 export async function streamAnthropic(
   request: ProviderStreamRequest
 ): Promise<string> {
-  const endpoint = request.endpoint || "https://api.anthropic.com/v1/messages";
+  const endpoint = request.endpoint || ANTHROPIC_ENDPOINT;
   const payload = buildAnthropicPayload(request);
 
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "x-api-key": request.apiKey.trim(),
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "Content-Type": "application/json",
-    },
+    headers: anthropicHeaders(request.apiKey),
     body: JSON.stringify(payload),
     signal: request.signal,
   });
@@ -93,6 +131,10 @@ export async function streamAnthropic(
 
       try {
         const json = JSON.parse(dataStr);
+        // message_start carries this request's cache counters (cache_read / cache_creation input tokens)
+        if (import.meta.env.DEV && json.type === "message_start") {
+          console.debug("[latency] anthropic usage", json.message?.usage);
+        }
         // Anthropic content_block_delta format: { type: "content_block_delta", delta: { type: "text_delta", text: "..." } }
         const text = json.delta?.text;
         if (typeof text === "string") {

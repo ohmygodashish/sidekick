@@ -3,10 +3,10 @@
 //! Dual-channel driverless audio capture, diarization, and Metal-accelerated transcription:
 //! - Channel 0 (Interviewer): System and meeting audio via macOS ScreenCaptureKit.
 //! - Channel 1 (Candidate): Local voice audio via default microphone (cpal / CoreAudio).
-//! - Dual-channel mixer: 16kHz mono resampling, energy-based VAD with 1.1s turn silence detection.
+//! - Dual-channel mixer: 16kHz mono resampling, energy-based VAD with 0.8s turn silence detection.
 //! - Ephemeral in-memory ring buffering with zero disk persistence (SEC-003).
 //! - Embedded Local Whisper engine (`whisper.rs`) with Apple Metal GPU acceleration (AC-005).
-//! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local`, `groq`, or `deepgram`.
+//! - Multi-engine STT dispatcher (`stt_dispatcher.rs`) routing to `whisper_local` or `groq`.
 //! - Asynchronous decoupled worker thread (`AsyncSttWorker`) ensuring ZERO audio callback thread blocking.
 //! - Sub-millisecond panic killswitch halt and buffer purge < 25ms (REQ-004).
 
@@ -52,7 +52,7 @@ pub struct AudioCaptureConfig {
     pub capture_interviewer: bool,
     /// Ingest candidate microphone (Channel 1: Candidate)
     pub capture_candidate: bool,
-    /// Turn silence threshold in seconds (default 1.1s, AC-004)
+    /// Turn silence threshold in seconds (default 0.8s, AC-004)
     pub vad_silence_secs: f32,
     /// Energy threshold for speech detection (default 0.015)
     pub vad_threshold: f32,
@@ -454,20 +454,13 @@ fn emit_audio_level<R: Runtime>(app: &AppHandle<R>, interviewer: f32, candidate:
 }
 
 const ENGLISH_ONLY_MODEL_MESSAGE: &str =
-    "The on-device model only understands English. Switch to Groq or Deepgram for other languages.";
-const DEEPGRAM_ARABIC_MESSAGE: &str =
-    "Deepgram may not transcribe Arabic with its current model. If captions fail, switch to Groq.";
+    "The on-device model only understands English. Switch to Groq for other languages.";
 
 /// Warns when the on-device model cannot transcribe the chosen language (`.en` models are English-only)
 fn english_only_model_warning(engine: SttEngineType, model_filename: &str, language: &str) -> Option<String> {
     let english_only = model_filename.ends_with(".en.bin");
     (engine == SttEngineType::WhisperLocal && english_only && language != "en")
         .then(|| ENGLISH_ONLY_MODEL_MESSAGE.to_string())
-}
-
-/// Warns when Deepgram's current model may not transcribe Arabic
-fn deepgram_arabic_warning(engine: SttEngineType, language: &str) -> Option<String> {
-    (engine == SttEngineType::Deepgram && language == "ar").then(|| DEEPGRAM_ARABIC_MESSAGE.to_string())
 }
 
 pub mod commands {
@@ -591,8 +584,7 @@ pub mod commands {
         let engine_type = state.dispatcher.get_engine();
         let local = state.dispatcher.local_whisper();
         let language = local.language();
-        Ok(english_only_model_warning(engine_type, &whisper::normalize_model_filename(&local.model_name()), &language)
-            .or_else(|| deepgram_arabic_warning(engine_type, &language)))
+        Ok(english_only_model_warning(engine_type, &whisper::normalize_model_filename(&local.model_name()), &language))
     }
 
     /// Starts the microphone test (mic only, no transcription). Async so the blocking microphone start runs off the main thread.
@@ -621,7 +613,7 @@ mod tests {
         let config = AudioCaptureConfig::default();
         assert!(config.capture_interviewer);
         assert!(config.capture_candidate);
-        assert_eq!(config.vad_silence_secs, 1.1);
+        assert_eq!(config.vad_silence_secs, 0.8);
         assert_eq!(config.vad_threshold, 0.015);
     }
 
@@ -659,8 +651,8 @@ mod tests {
         state.dispatcher.set_engine("groq").unwrap();
         assert_eq!(state.snapshot().stt_engine, "groq");
 
-        state.dispatcher.set_engine("deepgram").unwrap();
-        assert_eq!(state.snapshot().stt_engine, "deepgram");
+        assert!(state.dispatcher.set_engine("deepgram").is_err());
+        assert_eq!(state.snapshot().stt_engine, "groq");
     }
 
     #[test]
@@ -685,24 +677,12 @@ mod tests {
     fn test_english_only_model_warning_rule() {
         assert_eq!(
             english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "hi").as_deref(),
-            Some("The on-device model only understands English. Switch to Groq or Deepgram for other languages.")
+            Some("The on-device model only understands English. Switch to Groq for other languages.")
         );
         assert!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "auto").is_some());
         assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-tiny.en.bin", "en"), None);
         assert_eq!(english_only_model_warning(SttEngineType::Groq, "ggml-tiny.en.bin", "hi"), None);
         assert_eq!(english_only_model_warning(SttEngineType::WhisperLocal, "ggml-base.bin", "hi"), None);
-    }
-
-    #[test]
-    fn test_deepgram_arabic_warning_rule() {
-        assert_eq!(
-            deepgram_arabic_warning(SttEngineType::Deepgram, "ar").as_deref(),
-            Some("Deepgram may not transcribe Arabic with its current model. If captions fail, switch to Groq.")
-        );
-        assert_eq!(deepgram_arabic_warning(SttEngineType::Groq, "ar"), None);
-        assert_eq!(deepgram_arabic_warning(SttEngineType::WhisperLocal, "ar"), None);
-        assert_eq!(deepgram_arabic_warning(SttEngineType::Deepgram, "hi"), None);
-        assert_eq!(deepgram_arabic_warning(SttEngineType::Deepgram, "auto"), None);
     }
 
     #[test]

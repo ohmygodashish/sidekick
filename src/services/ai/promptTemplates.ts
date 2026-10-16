@@ -1,5 +1,6 @@
-import { PersonalizationProfile, SeniorityPreset, TonePreset } from "../../store/settingsStore";
+import type { PersonalizationProfile, SeniorityPreset, SettingsState, TonePreset } from "../../store/settingsStore";
 import type { ProgressiveSolution } from "../../store/sessionStore";
+import { resolveMode } from "./modes";
 
 /**
  * Returns tailored prompt guidance based on seniority preset (REQ-016).
@@ -142,6 +143,16 @@ export function buildSystemPromptParts(
 export function buildSystemPrompt(profile?: Partial<PersonalizationProfile>, options?: PromptOptions): string {
   const { prefix, suffix } = buildSystemPromptParts(profile, options);
   return prefix + suffix;
+}
+
+/** The system prompt parts for the saved settings, exactly as a solve builds them. The warm-up uses this too, so they match. */
+export function currentSystemParts(
+  settings: Pick<SettingsState, "profile" | "activeModeId" | "modes" | "outputLanguage">
+): { prefix: string; suffix: string } {
+  return buildSystemPromptParts(settings.profile, {
+    modeInstructions: resolveMode(settings.activeModeId, settings.modes).instructions,
+    outputLanguage: settings.outputLanguage,
+  });
 }
 
 const MAX_HISTORY_EXCHANGES = 6;

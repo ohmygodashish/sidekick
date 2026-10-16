@@ -19,6 +19,22 @@ describe("useSettingsStore", () => {
     expect(state.sttMode).toBe("whisper_local");
     expect(state.profile.seniorityPreset).toBe("senior");
     expect(state.profile.tonePreset).toBe("balanced");
+    expect(state.answerThinking).toBe(true);
+    expect(state.answerThinkingLevel).toBe("medium");
+    expect(state.pickThinking).toBe(false);
+  });
+
+  it("sets the thinking switches and level", () => {
+    const { setAnswerThinking, setAnswerThinkingLevel, setPickThinking } = useSettingsStore.getState();
+    setAnswerThinking(false);
+    setAnswerThinkingLevel("high");
+    setPickThinking(true);
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      answerThinking: false,
+      answerThinkingLevel: "high",
+      pickThinking: true,
+    });
   });
 
   it("should update API keys correctly", () => {
@@ -71,9 +87,6 @@ describe("useSettingsStore", () => {
   });
 
   it("should update STT mode", () => {
-    useSettingsStore.getState().setSttMode("deepgram");
-    expect(useSettingsStore.getState().sttMode).toBe("deepgram");
-
     useSettingsStore.getState().setSttMode("groq");
     expect(useSettingsStore.getState().sttMode).toBe("groq");
 
@@ -84,6 +97,9 @@ describe("useSettingsStore", () => {
   it("should reset settings to default values", () => {
     useSettingsStore.getState().setApiKey("groq", "test_groq_key");
     useSettingsStore.getState().setSeniority("principal");
+    useSettingsStore.getState().setAnswerThinking(false);
+    useSettingsStore.getState().setAnswerThinkingLevel("high");
+    useSettingsStore.getState().setPickThinking(true);
 
     useSettingsStore.getState().resetSettings();
 
@@ -91,6 +107,7 @@ describe("useSettingsStore", () => {
     // Keys survive a reset so a later "Save keys" can't wipe them from the config file
     expect(state.apiKeys.groq).toBe("test_groq_key");
     expect(state.profile.seniorityPreset).toBe("senior");
+    expect(state).toMatchObject({ answerThinking: true, answerThinkingLevel: "medium", pickThinking: false });
   });
 
   it("should exclude apiKeys from localStorage per SEC-001 partialize rule", () => {
@@ -105,6 +122,34 @@ describe("useSettingsStore", () => {
     expect(parsed.state.selectedModel).toBe("gpt-4o");
     // In-memory state still retains the key
     expect(useSettingsStore.getState().apiKeys.openai).toBe("sk-secret-test-key-should-not-persist");
+  });
+});
+
+describe("persisted settings migration (version 2 -> 3)", () => {
+  const migrate = useSettingsStore.persist.getOptions().migrate!;
+
+  it("fills the thinking settings with their defaults and keeps everything else", () => {
+    const migrated = migrate(
+      { selectedModel: "anthropic/claude-haiku-5.5", sttMode: "groq", outputLanguage: "German" },
+      2
+    ) as SettingsState;
+
+    expect(migrated).toMatchObject({
+      answerThinking: true,
+      answerThinkingLevel: "medium",
+      pickThinking: false,
+      sttMode: "groq",
+      outputLanguage: "German",
+    });
+  });
+
+  it("keeps thinking choices saved before the switch existed", () => {
+    const migrated = migrate(
+      { answerThinking: false, answerThinkingLevel: "high", pickThinking: true },
+      2
+    ) as SettingsState;
+
+    expect(migrated).toMatchObject({ answerThinking: false, answerThinkingLevel: "high", pickThinking: true });
   });
 });
 
@@ -129,9 +174,9 @@ describe("persisted settings migration (version 0 -> 1)", () => {
   });
 
   it("uses the persisted provider's default for a stale model", () => {
-    const migrated = migrate({ selectedProvider: "gemini", selectedModel: "gemini-2.0-flash" }, 0) as SettingsState;
+    const migrated = migrate({ selectedProvider: "openai", selectedModel: "gpt-4o" }, 0) as SettingsState;
 
-    expect(migrated.selectedModel).toBe("gemini-3.8-flash");
+    expect(migrated.selectedModel).toBe("gpt-5.6-luna");
   });
 
   it("leaves a model the user chose themselves alone", () => {
@@ -142,6 +187,44 @@ describe("persisted settings migration (version 0 -> 1)", () => {
 
     expect(migrated.selectedModel).toBe("anthropic/claude-haiku-5.5");
     expect(migrated.evaluatorModel).toBe("my/evaluator");
+  });
+});
+
+describe("settings migration to version 4 (Deepgram and Gemini removed)", () => {
+  const migrate = useSettingsStore.persist.getOptions().migrate!;
+
+  it("is persisted at version 4", () => {
+    expect(useSettingsStore.persist.getOptions().version).toBe(4);
+  });
+
+  it("moves Deepgram speech-to-text to Groq", () => {
+    const migrated = migrate({ sttMode: "deepgram" }, 3) as SettingsState;
+
+    expect(migrated.sttMode).toBe("groq");
+  });
+
+  it("moves a Gemini answer provider to OpenRouter with its default model", () => {
+    const migrated = migrate({ selectedProvider: "gemini", selectedModel: "gemini-3.8-flash" }, 3) as SettingsState;
+
+    expect(migrated).toMatchObject({ selectedProvider: "openrouter", selectedModel: "anthropic/claude-haiku-5.5" });
+  });
+
+  it("keeps the other settings, and Google models served through OpenRouter", () => {
+    const kept = {
+      selectedProvider: "openrouter",
+      selectedModel: "google/gemini-3.8-flash",
+      sttMode: "whisper_local",
+      answerThinkingLevel: "high",
+    };
+    const migrated = migrate({ ...kept }, 3) as SettingsState;
+
+    expect(migrated).toMatchObject(kept);
+  });
+
+  it("leaves a version 4 state alone", () => {
+    const state = { sttMode: "groq", selectedProvider: "anthropic", selectedModel: "claude-haiku-5-5" };
+
+    expect(migrate({ ...state }, 4)).toEqual(state);
   });
 });
 
@@ -180,7 +263,7 @@ describe("settings storage inside Tauri (config file)", () => {
   });
 
   it("getItem falls back to localStorage when load_settings returns null", async () => {
-    const legacy = { state: { sttMode: "deepgram" }, version: 0 };
+    const legacy = { state: { sttMode: "whisper_local" }, version: 3 };
     localStorage.setItem(KEY, JSON.stringify(legacy));
     invoke.mockResolvedValueOnce(null);
 
