@@ -21,7 +21,12 @@ export function usePointerHover() {
       const chain: Element[] = [];
       for (let el = target; el; el = el.parentElement) chain.push(el);
       if (chain.length === marked.length && chain.every((el, i) => el === marked[i])) return;
-      for (const el of marked) if (!chain.includes(el)) el.removeAttribute("data-hover");
+      for (const el of marked)
+        if (!chain.includes(el)) {
+          el.removeAttribute("data-hover");
+          // Leaving a surface cools its tooltips (Tip.tsx)
+          el.classList.remove("sk-tips-warm");
+        }
       for (const el of chain) el.setAttribute("data-hover", "");
       marked = chain;
     };

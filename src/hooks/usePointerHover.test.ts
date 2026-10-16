@@ -68,6 +68,19 @@ describe("usePointerHover", () => {
     expect(marked()).not.toEqual([]);
   });
 
+  it("cools a warm surface when the pointer leaves it", async () => {
+    await mountHook();
+
+    document.getElementById("panel")!.classList.add("sk-tips-warm");
+    under = document.getElementById("btn");
+    report(true, 10, 20);
+    expect(document.getElementById("panel")!.classList.contains("sk-tips-warm")).toBe(true);
+
+    under = document.getElementById("text");
+    report(true, 30, 40);
+    expect(document.getElementById("panel")!.classList.contains("sk-tips-warm")).toBe(false);
+  });
+
   it("follows real pointer moves where WebKit delivers them", async () => {
     await mountHook();
 

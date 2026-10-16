@@ -259,7 +259,7 @@ describe("AnswerPanel", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("close ends the thread, keeps it in history and closes Ask", () => {
+  it("close ends the thread, keeps it in history and closes Ask, after its exit", async () => {
     seed();
     useAppStore.setState({ isAskOpen: true });
     const { container } = render(<AnswerPanel />);
@@ -269,7 +269,10 @@ describe("AnswerPanel", () => {
     expect(useSessionStore.getState().activeThreadId).toBeNull();
     expect(useSessionStore.getState().threads).toHaveLength(1);
     expect(useAppStore.getState().isAskOpen).toBe(false);
-    expect(container.firstChild).toBeNull();
+    // The panel keeps the closed thread on screen while it plays its exit
+    expect(screen.getByRole("region", { name: "Answer" }).getAttribute("data-state")).toBe("closed");
+    expect(screen.getByText("Design a rate limiter?")).toBeDefined();
+    await waitFor(() => expect(container.firstChild).toBeNull());
   });
 
   it("New chat ends the thread but keeps Ask open, empty, and without a pick", () => {

@@ -117,7 +117,7 @@ describe("HUDContainer", () => {
     expect(screen.getByTestId("answer-panel")).toBeDefined();
   });
 
-  it("settings replace the answer panel, and Ask closes settings", () => {
+  it("settings replace the answer panel, and Ask closes settings", async () => {
     useSettingsStore.setState({ isSettingsOpen: true });
     render(<HUDContainer />);
     expect(screen.getByTestId("settings-drawer")).toBeDefined();
@@ -125,7 +125,8 @@ describe("HUDContainer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Ask/ }));
     expect(useSettingsStore.getState().isSettingsOpen).toBe(false);
-    expect(screen.getByTestId("answer-panel")).toBeDefined();
+    // Settings plays its exit first; the answer panel follows
+    expect(await screen.findByTestId("answer-panel")).toBeDefined();
   });
 
   it("shows the start error in an alert when the meeting failed to start", () => {

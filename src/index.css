@@ -183,6 +183,11 @@ body,
     background-color: var(--sk-tip-key);
     color: var(--sk-tip-fg);
   }
+  /* Warm: a tip in this surface has shown and the pointer is still on it, so neighbours switch instantly */
+  .sk-tips-warm[data-hover] .sk-tip-host > .sk-tip {
+    transition-duration: 0ms;
+    transition-delay: 0ms;
+  }
 
   /* Bar buttons: one height, one shape, one hover for text and icon-only buttons alike */
   .sk-btn {
@@ -246,6 +251,8 @@ body,
  * .sk-pop: popups and pieces that come and go. Enters via @starting-style; with usePresence,
  *   data-state="closed" plays a faster exit before unmount.
  * .sk-fade: text that changes often (options, captions); key the element by its text to refade.
+ * .sk-fade-out: the outgoing text of a cross-fade (FadeText in LiveOptions).
+ * .sk-rise: a new message in a thread; fades in rising 4px.
  */
 .sk-pop {
   transition:
@@ -261,6 +268,20 @@ body,
 .sk-fade {
   transition: opacity 150ms var(--sk-ease);
 }
+/* .sk-fade-out: the outgoing text of a cross-fade; mounted already visible, then fades and blurs away */
+.sk-fade-out {
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity 120ms var(--sk-ease),
+    filter 120ms var(--sk-ease);
+}
+/* .sk-rise: a new message in a thread: fades in while rising 4px */
+.sk-rise {
+  transition:
+    opacity 160ms var(--sk-ease),
+    transform 160ms var(--sk-ease);
+}
 @starting-style {
   .sk-pop {
     opacity: 0;
@@ -269,10 +290,26 @@ body,
   .sk-fade {
     opacity: 0;
   }
+  .sk-fade-out {
+    opacity: 1;
+    filter: none;
+  }
+  .sk-rise {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 /* Popups grow from their trigger */
 .sk-menu.sk-pop {
   transform-origin: top right;
+}
+
+/* Theme changes land in one frame: transitions are off while data-theme changes (useTheme).
+   Not the segmented thumb: it slides to the theme just picked, and has no colour transition. */
+:root[data-theme-switching] *:not(.sk-thumb),
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -288,8 +325,15 @@ body,
     --tw-scale-x: 1;
     --tw-scale-y: 1;
   }
+  /* A still spinner: the "Thinking…" text says the same */
+  .animate-spin {
+    animation: none;
+  }
   @starting-style {
     .sk-pop {
+      transform: none;
+    }
+    .sk-rise {
       transform: none;
     }
   }

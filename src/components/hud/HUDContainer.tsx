@@ -35,6 +35,7 @@ export const HUDContainer: React.FC = () => {
   const lastMeetingError = useRef<string | null>(null);
   if (meetingError) lastMeetingError.current = meetingError;
   const isSettingsOpen = useSettingsStore((state) => state.isSettingsOpen);
+  const settings = usePresence(isSettingsOpen);
   const isClickThrough = useAppStore((state) => state.isClickThrough);
   const rootRef = useRef<HTMLDivElement>(null);
   useHitRegions(rootRef);
@@ -60,8 +61,8 @@ export const HUDContainer: React.FC = () => {
         </>
       )}
       <div className="flex min-h-0 w-full max-w-[560px] flex-1 flex-col">
-        {isSettingsOpen ? (
-          <SettingsDrawer />
+        {settings.mounted ? (
+          <SettingsDrawer isOpen state={settings.state} />
         ) : layoutMode === "dynamic_notch" ? null : (
           <AnswerPanel />
         )}

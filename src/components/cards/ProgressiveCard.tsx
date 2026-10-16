@@ -40,7 +40,7 @@ const Section: React.FC<SectionProps> = ({ rowTestId, icon, label, detail, defau
         </span>
         <ChevronDown
           className={cn(
-            "ml-auto h-3.5 w-3.5 shrink-0 text-sk-fg-3 transition-transform duration-150",
+            "ml-auto h-3.5 w-3.5 shrink-0 text-sk-fg-3 transition-transform duration-150 motion-reduce:transition-none",
             open && "rotate-180"
           )}
           aria-hidden="true"

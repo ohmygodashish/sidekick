@@ -44,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -229,6 +230,23 @@ describe("LiveOptions and CaptionLine", () => {
 
     window.removeEventListener("sidekick:deep_solve", listener);
     expect((listener.mock.calls[0][0] as CustomEvent).detail.question).toBe("BFS vs DFS?");
+  });
+
+  it("cross-fades a changed option: the old text stays aria-hidden until the fade ends", () => {
+    vi.useFakeTimers();
+    setGroqKey("gsk-test");
+    useSessionStore.setState({ askedQuestion: "How do you detect a cycle?", likelyQuestions: ["BFS vs DFS?"] });
+    render(<LiveOptions />);
+
+    act(() => useSessionStore.setState({ likelyQuestions: ["Topological sort?"] }));
+    expect(screen.getByText("BFS vs DFS?").getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByText("Topological sort?").getAttribute("aria-hidden")).toBeNull();
+    expect(screen.getByRole("button", { name: /Topological sort/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /BFS/ })).toBeNull();
+
+    act(() => vi.advanceTimersByTime(120));
+    expect(screen.queryByText("BFS vs DFS?")).toBeNull();
+    expect(screen.getByText("Topological sort?")).toBeDefined();
   });
 
   it("explains what's missing when there are no options yet", () => {

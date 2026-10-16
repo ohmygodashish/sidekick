@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useSettingsStore, type ApiProvider, type SolutionProvider, type ThinkingLevel } from "../../store/settingsStore";
 import { usePresence } from "../../hooks/usePresence";
+import { Segmented } from "./Segmented";
 import { activeModel, EVALUATOR_MODEL, SOLUTION_MODELS } from "../../services/ai/models";
 import { reasoningSupport } from "../../services/ai/reasoning";
 import { cn } from "../../lib/utils";
@@ -27,61 +28,6 @@ const THINKING_LEVELS: { id: ThinkingLevel; label: string }[] = [
   { id: "medium", label: "Medium" },
   { id: "high", label: "High" },
 ];
-
-interface SegmentedProps<T extends string> {
-  labelledBy: string;
-  options: { id: T; label: string }[];
-  value: T;
-  onChange: (id: T) => void;
-}
-
-/** A radiogroup of buttons. Arrow keys move the selection and the focus together. */
-function Segmented<T extends string>({ labelledBy, options, value, onChange }: SegmentedProps<T>) {
-  const buttons = useRef<Partial<Record<T, HTMLButtonElement | null>>>({});
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const step =
-      e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
-    if (step === 0) return;
-    e.preventDefault();
-    const index = options.findIndex((o) => o.id === value);
-    const next = options[(index + step + options.length) % options.length].id;
-    onChange(next);
-    buttons.current[next]?.focus();
-  };
-
-  return (
-    <div
-      role="radiogroup"
-      aria-labelledby={labelledBy}
-      onKeyDown={onKeyDown}
-      className="grid grid-cols-3 gap-1 rounded-lg bg-sk-fill-2 p-1"
-    >
-      {options.map(({ id, label }) => {
-        const selected = value === id;
-        return (
-          <button
-            key={id}
-            ref={(el) => {
-              buttons.current[id] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(id)}
-            className={cn(
-              "flex h-7 items-center justify-center rounded text-[13px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
-              selected ? "bg-sk-accent-tint text-sk-fg" : "text-sk-fg-2 hover:bg-sk-hover"
-            )}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 interface SwitchRowProps {
   id: string;

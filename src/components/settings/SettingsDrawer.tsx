@@ -29,6 +29,7 @@ import {
   type ModelAssetInfo,
 } from "../../lib/ipc";
 import { ApiKeyInputs } from "./ApiKeyInputs";
+import { Segmented } from "./Segmented";
 import { ProfileEditor } from "./ProfileEditor";
 import { ModesTab } from "./ModesTab";
 import { MicSection } from "./MicSection";
@@ -40,6 +41,8 @@ export type SettingsTab = "keys" | "profile" | "modes" | "audio" | "keybinds";
 
 interface SettingsDrawerProps {
   isOpen?: boolean;
+  /** closed while the drawer plays its exit */
+  state?: "open" | "closed";
   onClose?: () => void;
   defaultTab?: SettingsTab;
 }
@@ -79,6 +82,7 @@ type DangerAction = "burn" | "reset";
 
 export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   isOpen: propsIsOpen,
+  state,
   onClose: propsOnClose,
   defaultTab = "keys",
 }) => {
@@ -102,7 +106,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab);
   const tabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
-  const themeRefs = useRef<Partial<Record<ThemePreference, HTMLButtonElement | null>>>({});
 
   const [localModels, setLocalModels] = useState<ModelAssetInfo[]>([]);
   const [downloading, setDownloading] = useState(false);
@@ -219,23 +222,13 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     tabRefs.current[next]?.focus();
   };
 
-  // Arrow keys move the selection as well as focus, so the theme applies as you move
-  const onThemeKeyDown = (e: React.KeyboardEvent) => {
-    const step =
-      e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
-    if (step === 0) return;
-    e.preventDefault();
-    const index = THEMES.findIndex((t) => t.id === theme);
-    const next = THEMES[(index + step + THEMES.length) % THEMES.length].id;
-    setTheme(next);
-    themeRefs.current[next]?.focus();
-  };
-
   return (
     <section
       role="dialog"
       aria-label="Settings"
       data-testid="settings-drawer"
+      data-state={state}
+      inert={state === "closed"}
       className="sk-panel sk-pop min-h-0"
     >
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
@@ -293,37 +286,16 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         {activeTab === "keys" && (
           <>
             <div className="space-y-2">
-              <h3 className="sk-label">Appearance</h3>
-              <div
-                role="radiogroup"
-                aria-label="Theme"
-                onKeyDown={onThemeKeyDown}
-                className="grid grid-cols-3 gap-1 rounded-lg bg-sk-fill p-1"
-              >
-                {THEMES.map(({ id, label, icon: Icon }) => {
-                  const selected = theme === id;
-                  return (
-                    <button
-                      key={id}
-                      ref={(el) => {
-                        themeRefs.current[id] = el;
-                      }}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      tabIndex={selected ? 0 : -1}
-                      onClick={() => setTheme(id)}
-                      className={cn(
-                        "flex h-8 items-center justify-center gap-1.5 rounded text-[13px] font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-sk-focus",
-                        selected ? "bg-sk-accent-tint text-sk-fg" : "bg-sk-fill text-sk-fg-2 hover:bg-sk-hover"
-                      )}
-                    >
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{label}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <h3 id="appearance-label" className="sk-label">
+                Appearance
+              </h3>
+              <Segmented
+                labelledBy="appearance-label"
+                options={THEMES}
+                value={theme}
+                onChange={setTheme}
+                className="bg-sk-fill"
+              />
               <p className="sk-meta">System follows your macOS appearance.</p>
             </div>
             <ApiKeyInputs />

@@ -1,16 +1,41 @@
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { WandSparkles } from "lucide-react";
 import { useAppStore, runAssist } from "../../store/appStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { buildOptions, pickLiveOption } from "../../hooks/useLiveOptions";
-import { usePresence } from "../../hooks/usePresence";
+import { usePresence, EXIT_MS } from "../../hooks/usePresence";
 import { getShortcut } from "../../lib/shortcuts";
 import { cn } from "../../lib/utils";
 import { ScreenToggle } from "./ScreenToggle";
 import { Tip } from "./Tip";
 
 const SHORTCUTS = ["⌘⌥1", "⌘⌥2", "⌘⌥3"];
+
+/** Option text that cross-fades: the old text fades out on top of the new one fading in */
+const FadeText: React.FC<{ text: string }> = ({ text }) => {
+  const [old, setOld] = useState<string | null>(null);
+  const last = useRef(text);
+  useLayoutEffect(() => {
+    if (last.current === text) return;
+    setOld(last.current);
+    last.current = text;
+    const id = setTimeout(() => setOld(null), EXIT_MS);
+    return () => clearTimeout(id);
+  }, [text]);
+  return (
+    <span className="grid min-w-0 flex-1">
+      {old !== null && (
+        <span key={old} aria-hidden="true" className="sk-fade-out col-start-1 row-start-1">
+          {old}
+        </span>
+      )}
+      <span key={text} className="sk-fade col-start-1 row-start-1">
+        {text}
+      </span>
+    </span>
+  );
+};
 
 /** Three numbered questions while listening: the one just asked (pinned) and likely next ones. */
 export const LiveOptions: React.FC = () => {
@@ -56,10 +81,7 @@ export const LiveOptions: React.FC = () => {
           className={cn("sk-menu-item h-auto min-h-8 py-1.5", option.text === picked && "bg-sk-accent-tint")}
         >
           <kbd className="sk-kbd shrink-0">{SHORTCUTS[i]}</kbd>
-          {/* Keyed by text so a changed option fades in instead of snapping */}
-          <span key={option.text} className="sk-fade min-w-0 flex-1">
-            {option.text}
-          </span>
+          <FadeText text={option.text} />
           {option.asked && <span className="shrink-0 text-[11px] font-medium text-sk-accent">Asked</span>}
         </button>
       ))}

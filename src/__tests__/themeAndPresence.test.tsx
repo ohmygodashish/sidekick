@@ -18,6 +18,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.themeSwitching;
 });
 
 describe("usePresence", () => {
@@ -62,5 +63,21 @@ describe("useTheme", () => {
 
     unmount();
     expect(listeners.size).toBe(0);
+  });
+
+  it("switches theme in one frame: transitions are off for two frames, but not on first apply", () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame"] });
+    useSettingsStore.setState({ theme: "dark" });
+    render(<ThemeHost />);
+    expect(document.documentElement.dataset.themeSwitching).toBeUndefined();
+
+    act(() => useSettingsStore.setState({ theme: "light" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.dataset.themeSwitching).toBe("");
+
+    act(() => vi.advanceTimersToNextFrame());
+    expect(document.documentElement.dataset.themeSwitching).toBe("");
+    act(() => vi.advanceTimersToNextFrame());
+    expect(document.documentElement.dataset.themeSwitching).toBeUndefined();
   });
 });

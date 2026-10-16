@@ -9,6 +9,7 @@ import {
 import { startNewChat, submitTypedAsk, useAppStore } from "../../store/appStore";
 import { safeInvoke } from "../../lib/ipc";
 import { getShortcut } from "../../lib/shortcuts";
+import { usePresence } from "../../hooks/usePresence";
 import { ProgressiveCard } from "../cards/ProgressiveCard";
 import { ScreenToggle } from "../hud/ScreenToggle";
 import { Tip } from "../hud/Tip";
@@ -26,7 +27,7 @@ interface ExchangeProps {
 
 // Memoized: while one answer streams, only that exchange re-renders
 const Exchange = React.memo(({ message, latest, streaming, onRetry }: ExchangeProps) => (
-  <div className="sk-fade space-y-3">
+  <div className="sk-rise space-y-3">
     <p className="sk-meta">{message.question}</p>
     {message.viewedScreen && (
       <p className="sk-meta flex items-center gap-1.5">
@@ -137,9 +138,17 @@ export const AnswerPanel: React.FC = () => {
     []
   );
 
-  if (!thread && !isAskOpen) return null;
+  const visible = Boolean(thread) || isAskOpen;
+  const presence = usePresence(visible);
+  // Closing keeps the last thread on screen while the panel plays its exit
+  const lastThread = useRef(thread);
+  // Tracks the thread (or none, after New chat) while open, and freezes at close
+  if (visible) lastThread.current = thread;
+  const shown = visible ? thread : lastThread.current;
 
-  const messages = thread?.messages ?? [];
+  if (!presence.mounted) return null;
+
+  const messages = shown?.messages ?? [];
   const latestId = messages[messages.length - 1]?.id;
 
   // Ends the answer on screen and the active thread (it stays in History) and closes Ask
@@ -149,7 +158,12 @@ export const AnswerPanel: React.FC = () => {
   };
 
   return (
-    <section aria-label="Answer" className="sk-panel sk-pop min-h-0">
+    <section
+      aria-label="Answer"
+      data-state={presence.state}
+      inert={presence.state === "closed"}
+      className="sk-panel sk-pop min-h-0"
+    >
       {/* px-3 matches the Ask box's form: 12px in from each edge, so Close's centre lines up with the screen toggle */}
       <div className="flex items-center justify-between gap-1 px-3 pt-3">
         <div className="flex items-center gap-1">
@@ -158,7 +172,7 @@ export const AnswerPanel: React.FC = () => {
               type="button"
               className="sk-icon-btn rounded-lg"
               aria-label="New chat"
-              disabled={!thread}
+              disabled={!shown}
               onClick={startNewChat}
             >
               <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
@@ -205,7 +219,7 @@ export const AnswerPanel: React.FC = () => {
           <input
             ref={inputRef}
             aria-label="Ask a follow-up"
-            placeholder={thread ? "Ask a follow-up…" : "Ask about your screen or type a question…"}
+            placeholder={shown ? "Ask a follow-up…" : "Ask about your screen or type a question…"}
             className="sk-field pr-28"
             value={askDraft}
             onChange={(e) => useSessionStore.setState({ askDraft: e.target.value })}
