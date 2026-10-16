@@ -113,7 +113,7 @@ describe("SettingsDrawer", () => {
 
   describe("Keys tab", () => {
     it("saves keys to the backend and shows Saved", async () => {
-      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
 
       fireEvent.change(screen.getByLabelText("OpenAI API key"), {
@@ -131,6 +131,18 @@ describe("SettingsDrawer", () => {
       // Cleared keys are propagated too, so deleted keys are wiped in the backend
       expect(spyInvoke).toHaveBeenCalledWith("store_api_key", { provider: "anthropic", key: "" });
       expect(screen.getByText("Saved")).toBeDefined();
+    });
+
+    it("shows a failure instead of Saved when the backend rejects the save", async () => {
+      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("disk full"));
+      render(<SettingsDrawer isOpen={true} defaultTab="keys" />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Save keys" }));
+      });
+
+      expect(screen.getByText("Couldn't save keys. Try again.")).toBeDefined();
+      expect(screen.queryByText("Saved")).toBeNull();
     });
 
     it("checks the key format only and never calls the backend", () => {
@@ -333,7 +345,7 @@ describe("SettingsDrawer", () => {
 
   describe("Danger tab", () => {
     it("burns the session only on the second click and clears it after the confirm times out", async () => {
-      const spyInvoke = vi.spyOn(ipc, "safeInvoke").mockResolvedValue(null);
+      const spyInvoke = vi.spyOn(ipc, "invokeInTauri").mockResolvedValue(undefined);
       useSessionStore.getState().addTranscriptTurn({
         speaker: "interviewer",
         text: "Tell me about Paxos vs Raft.",
@@ -353,6 +365,19 @@ describe("SettingsDrawer", () => {
       expect(useSessionStore.getState().transcript.length).toBe(0);
       expect(spyInvoke).toHaveBeenCalledWith("burn_session");
       expect(screen.getByText("Session cleared")).toBeDefined();
+    });
+
+    it("shows a failure instead of Session cleared when the backend burn fails", async () => {
+      vi.spyOn(ipc, "invokeInTauri").mockRejectedValue(new Error("locked"));
+      render(<SettingsDrawer isOpen={true} defaultTab="danger" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Burn" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Click again to burn" }));
+      });
+
+      expect(screen.getByText("Couldn't clear the session in the backend. Try again.")).toBeDefined();
+      expect(screen.queryByText("Session cleared")).toBeNull();
     });
 
     it("drops the burn confirm after 3 seconds", () => {
@@ -381,7 +406,7 @@ describe("SettingsDrawer", () => {
 
       const state = useSettingsStore.getState();
       expect(state.profile.seniorityPreset).toBe("senior");
-      expect(state.selectedModel).toBe("anthropic/claude-3.5-sonnet");
+      expect(state.selectedModel).toBe("anthropic/claude-haiku-5.5");
       expect(screen.getByText("Settings reset")).toBeDefined();
     });
 

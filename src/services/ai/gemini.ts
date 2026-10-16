@@ -1,4 +1,5 @@
 import { readSSEStream } from "./streamParser";
+import { assertOk } from "./errors";
 import { cleanBase64Data, ProviderStreamRequest } from "./openrouter";
 
 /**
@@ -53,7 +54,7 @@ export function buildGeminiPayload(request: ProviderStreamRequest) {
  * Resolves the clean Gemini model string.
  */
 export function getGeminiModel(model?: string): string {
-  let m = model || "gemini-2.0-flash";
+  let m = model || "gemini-3.8-flash";
   if (m.startsWith("google/") || m.startsWith("gemini/")) {
     m = m.replace(/^(google|gemini)\//, "");
   }
@@ -83,12 +84,7 @@ export async function streamGemini(
     signal: request.signal,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Gemini HTTP ${response.status} ${response.statusText}: ${errorBody}`
-    );
-  }
+  await assertOk(response);
 
   let accumulated = "";
 
@@ -115,7 +111,8 @@ export async function streamGemini(
         // Partial or malformed SSE line, ignore
       }
     },
-    request.signal
+    request.signal,
+    request.onActivity
   );
 
   return accumulated;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import {
   getSeniorityPrompt,
   getTonePrompt,
@@ -28,16 +28,39 @@ import {
   parseProgressiveStream,
   readSSEStream,
 } from "../services/ai/streamParser";
-import {
-  dispatchDeepSolve,
-  generateMockSolution,
-  getDefaultModelForProvider,
-} from "../services/ai/dispatcher";
+import { dispatchDeepSolve, getDefaultModelForProvider } from "../services/ai/dispatcher";
 import { useDeepSolver } from "../hooks/useDeepSolver";
 import { useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppStore } from "../store/appStore";
 import * as ipcModule from "../lib/ipc";
+
+const SOLUTION_XML = `<stage_1_intuition>
+<verbal_summary>Use a hash map for a single pass.</verbal_summary>
+<key_tradeoffs><tradeoff>O(N) extra memory</tradeoff></key_tradeoffs>
+</stage_1_intuition>
+<stage_2_code>
+<language>python</language>
+<code>def two_sum(nums, target): return []</code>
+<explanation>Single pass.</explanation>
+</stage_2_code>
+<stage_3_analysis>
+<time_complexity>O(N)</time_complexity>
+<space_complexity>O(N)</space_complexity>
+<edge_cases><edge_case>Empty input</edge_case></edge_cases>
+</stage_3_analysis>`;
+
+// One SSE response carrying the whole answer, shaped like an OpenRouter chat stream
+function sseResponse(content: string) {
+  const body = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+  return new Response(body, { status: 200 });
+}
+
+function useOpenRouterKey() {
+  useSettingsStore.setState((state) => ({
+    apiKeys: { ...state.apiKeys, openrouter: "sk-or-test" },
+  }));
+}
 
 // Test component to exercise useDeepSolver React hook
 function TestDeepSolverComponent({
@@ -84,7 +107,7 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
     useAppStore.setState({ isPanicked: false, isVisible: true });
     useSettingsStore.setState({
       selectedProvider: "openrouter",
-      selectedModel: "anthropic/claude-3.5-sonnet",
+      selectedModel: "anthropic/claude-haiku-5.5",
       apiKeys: {
         openrouter: "",
         anthropic: "",
@@ -191,6 +214,23 @@ describe("Task 12: Multi-Provider Deep Intelligence Gateway", () => {
       const textBlock = payload.messages[0].content[1];
       expect(textBlock.type).toBe("text");
       expect(textBlock.text).toBe("Solve Two Sum");
+    });
+
+    it("keeps the openai/ prefix for Groq and sends GPT-5 reasoning parameters", () => {
+      const groq = buildOpenAIPayload({
+        apiKey: "gsk-test",
+        model: "openai/gpt-oss-120b",
+        prompt: "Two sum",
+        onChunk: vi.fn(),
+        endpoint: "https://api.groq.com/openai/v1/chat/completions",
+      });
+      expect(groq.model).toBe("openai/gpt-oss-120b");
+
+      const gpt5 = buildOpenAIPayload({ apiKey: "sk-test", model: "openai/gpt-5.6-luna", prompt: "Two sum", onChunk: vi.fn() });
+      expect(gpt5.model).toBe("gpt-5.6-luna");
+      expect(gpt5.max_completion_tokens).toBe(4096);
+      expect(gpt5.temperature).toBeUndefined();
+      expect(gpt5.max_tokens).toBeUndefined();
     });
 
     it("builds OpenAI payload with image_url vision structure", () => {
@@ -460,55 +500,12 @@ Space Complexity: O(C) capacity
   });
 
   describe("5. Unified Dispatcher (dispatcher.ts)", () => {
-    it("returns correct default models for providers", () => {
-      expect(getDefaultModelForProvider("openrouter")).toBe("anthropic/claude-3.5-sonnet");
-      expect(getDefaultModelForProvider("anthropic")).toBe("claude-3-5-sonnet-20241022");
-      expect(getDefaultModelForProvider("openai")).toBe("gpt-4o");
-      expect(getDefaultModelForProvider("gemini")).toBe("gemini-2.0-flash");
-    });
-
-    it("generates rate-limiter specific mock solution for rate limiter query", () => {
-      const xml = generateMockSolution("How would you design a distributed rate limiter?");
-      expect(xml).toContain("Sliding Window Counter");
-      expect(xml).toContain("SlidingWindowRateLimiter");
-      expect(xml).toContain("Clock skew");
-    });
-
-    it("generates cache specific mock solution for hot key query", () => {
-      const xml = generateMockSolution("How do you handle hot keys in a distributed cache?");
-      expect(xml).toContain("HotKeyMitigatingCache");
-      expect(xml).toContain("L1");
-      expect(xml).toContain("XFetch");
-    });
-
-    it("dispatches to simulated mock solution when offline or no API key is provided", async () => {
-      const updates: any[] = [];
-      const solution = await dispatchDeepSolve({
-        provider: "openrouter",
-        apiKey: "", // No key -> simulated stream
-        prompt: "How would you design a distributed cache?",
-        onProgressiveUpdate: (u) => updates.push(u),
-      });
-
-      expect(solution.stage1Intuition).not.toBeNull();
-      expect(solution.stage2Code).not.toBeNull();
-      expect(solution.stage3Analysis).not.toBeNull();
-      expect(updates.length).toBeGreaterThan(0);
-    });
-
-    it("falls back to simulated solution if live provider throws an HTTP error", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response("Invalid API Key", { status: 401, statusText: "Unauthorized" })
-      );
-
-      const solution = await dispatchDeepSolve({
-        provider: "anthropic",
-        apiKey: "invalid-key",
-        prompt: "Two sum problem",
-      });
-
-      expect(solution.stage1Intuition).not.toBeNull();
-      expect(solution.stage2Code).not.toBeNull();
+    it("returns the current default model for each provider", () => {
+      expect(getDefaultModelForProvider("openrouter")).toBe("anthropic/claude-haiku-5.5");
+      expect(getDefaultModelForProvider("anthropic")).toBe("claude-haiku-5-5");
+      expect(getDefaultModelForProvider("openai")).toBe("gpt-5.6-luna");
+      expect(getDefaultModelForProvider("gemini")).toBe("gemini-3.8-flash");
+      expect(getDefaultModelForProvider("groq")).toBe("openai/gpt-oss-120b");
     });
 
     it("routes groq provider requests to Groq completions endpoint", async () => {
@@ -542,6 +539,8 @@ Space Complexity: O(C) capacity
     it("orchestrates deep solve and populates sessionStore progressively", async () => {
       const onProgress = vi.fn();
       const onComplete = vi.fn();
+      useOpenRouterKey();
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(SOLUTION_XML));
 
       let resolveComplete: (() => void) | undefined;
       const completePromise = new Promise<void>((resolve) => {
@@ -625,6 +624,8 @@ Space Complexity: O(C) capacity
     });
 
     it("starts solving when window event sidekick:deep_solve is triggered", async () => {
+      useOpenRouterKey();
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(SOLUTION_XML));
       render(<TestDeepSolverComponent />);
 
       await act(async () => {
@@ -642,10 +643,10 @@ Space Complexity: O(C) capacity
         );
       });
 
+      await waitFor(() => expect(useSessionStore.getState().stage3Analysis).not.toBeNull());
       const storeState = useSessionStore.getState();
       expect(storeState.stage1Intuition).not.toBeNull();
       expect(storeState.stage2Code).not.toBeNull();
-      expect(storeState.stage3Analysis).not.toBeNull();
     });
 
     it("allows manual cancelSolve at any point", async () => {

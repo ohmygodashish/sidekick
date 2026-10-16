@@ -364,7 +364,7 @@ export async function detectQuestion(
   }
 
   // Clean model name (e.g. "groq/llama-3.3-70b-versatile" -> "llama-3.3-70b-versatile")
-  let model = options?.model || "llama-3.3-70b-versatile";
+  let model = options?.model || "qwen/qwen3.8-27b";
   if (model.startsWith("groq/")) {
     model = model.slice("groq/".length);
   }

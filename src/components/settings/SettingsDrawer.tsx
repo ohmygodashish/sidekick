@@ -11,7 +11,7 @@ import {
 import { useSettingsStore, type SttMode } from "../../store/settingsStore";
 import { useSessionStore } from "../../store/sessionStore";
 import {
-  safeInvoke,
+  invokeInTauri,
   listLocalSttModels,
   downloadSttModel,
   type ModelAssetInfo,
@@ -71,6 +71,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
   const [armed, setArmed] = useState<DangerAction | null>(null);
   const [done, setDone] = useState<DangerAction | null>(null);
+  const [burnFailed, setBurnFailed] = useState(false);
   const armTimer = useRef<number | undefined>(undefined);
   const doneTimer = useRef<number | undefined>(undefined);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -151,7 +152,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setArmed(null);
     if (action === "burn") {
       clearSession();
-      await safeInvoke("burn_session");
+      try {
+        await invokeInTauri("burn_session");
+      } catch (err) {
+        console.warn("[Sidekick] burn_session failed:", err);
+        setBurnFailed(true);
+        return;
+      }
+      setBurnFailed(false);
     } else {
       resetSettings();
     }
@@ -321,6 +329,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 {done === "burn" && (
                   <span role="status" className="sk-meta text-emerald-400">
                     Session cleared
+                  </span>
+                )}
+                {burnFailed && (
+                  <span role="status" className="sk-meta text-red-300">
+                    Couldn&apos;t clear the session in the backend. Try again.
                   </span>
                 )}
               </div>

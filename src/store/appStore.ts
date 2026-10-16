@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { safeInvoke } from "../lib/ipc";
+import { invokeInTauri, safeInvoke } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
 
 // "dynamic_notch" now means compact view (bar only); the name is kept for Rust and saved settings.
@@ -8,12 +8,6 @@ export type LayoutMode = "floating_hud" | "dynamic_notch";
 export type MeetingStatus = "idle" | "starting" | "live" | "stopping";
 
 const MEETING_IDLE = { meetingStatus: "idle" as MeetingStatus, meetingStartedAt: null };
-
-// Rejects on backend errors inside Tauri; resolves without doing anything in a plain browser or tests.
-async function invokeInTauri(cmd: string, args?: Record<string, unknown>) {
-  const { invoke, isTauri } = await import("@tauri-apps/api/core");
-  if (typeof isTauri === "function" && isTauri()) await invoke(cmd, args);
-}
 
 export interface AppState {
   layoutMode: LayoutMode;
@@ -93,7 +87,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       await invokeInTauri("start_audio_capture", { config: null });
       set({ meetingStatus: "live", meetingStartedAt: Date.now() });
     } catch (err) {
-      set({ ...MEETING_IDLE, meetingError: String(err) });
+      // A panic during start cancels it; that isn't an error to show next time
+      set({ ...MEETING_IDLE, meetingError: get().isPanicked ? null : String(err) });
     }
   },
 

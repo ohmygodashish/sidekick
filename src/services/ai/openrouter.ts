@@ -1,4 +1,5 @@
 import { readSSEStream } from "./streamParser";
+import { assertOk } from "./errors";
 
 export interface ProviderStreamRequest {
   apiKey: string;
@@ -9,6 +10,8 @@ export interface ProviderStreamRequest {
   imageMimeType?: string;
   signal?: AbortSignal;
   onChunk: (chunk: string) => void;
+  /** Called on every read from the stream, keep-alives and reasoning included */
+  onActivity?: () => void;
   endpoint?: string;
 }
 
@@ -29,7 +32,7 @@ export function cleanBase64Data(raw: string): string {
  * Builds OpenRouter Chat Completion payload matching OpenAI vision spec.
  */
 export function buildOpenRouterPayload(request: ProviderStreamRequest) {
-  const model = request.model || "anthropic/claude-3.5-sonnet";
+  const model = request.model || "anthropic/claude-haiku-5.5";
   const messages: Array<{ role: string; content: any }> = [];
 
   if (request.systemPrompt) {
@@ -91,12 +94,7 @@ export async function streamOpenRouter(
     signal: request.signal,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `OpenRouter HTTP ${response.status} ${response.statusText}: ${errorBody}`
-    );
-  }
+  await assertOk(response);
 
   let accumulated = "";
 
@@ -118,7 +116,8 @@ export async function streamOpenRouter(
         // Partial or malformed SSE line, ignore
       }
     },
-    request.signal
+    request.signal,
+    request.onActivity
   );
 
   return accumulated;

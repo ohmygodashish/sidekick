@@ -19,15 +19,19 @@
 //!   "is_final": true
 //! }
 //! ```
+//! A turn with no transcript (no model, bad key, failed request) is reported on `sidekick://stt_error`
+//! instead. Text is never invented.
 //!
 //! Decoupled from real-time audio threads via bounded non-blocking queues (`AsyncSttWorker`).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -39,6 +43,15 @@ pub const EVENT_STT_CHUNK: &str = "sidekick://stt_chunk";
 
 /// Tauri event name emitted when the active STT engine configuration changes
 pub const EVENT_STT_ENGINE_CHANGED: &str = "sidekick://stt_engine_changed";
+
+/// Tauri event name emitted when a turn produced no transcript, or needed the local fallback
+pub const EVENT_STT_ERROR: &str = "sidekick://stt_error";
+
+/// A repeated error message is emitted at most once per this window
+const STT_ERROR_THROTTLE: Duration = Duration::from_secs(10);
+
+const NO_MODEL_MESSAGE: &str =
+    "No speech model installed. Download one in Settings → Audio, or switch to Groq.";
 
 /// Supported speech-to-text inference engines (REQ-009, REQ-010)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -102,6 +115,76 @@ pub struct SttChunk {
     pub is_final: bool,
 }
 
+/// A turn that produced no transcript, or only after the local model took over (`sidekick://stt_error`)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SttFailure {
+    pub engine: SttEngineType,
+    pub message: String,
+    pub recovered: bool,
+    pub timestamp: u64,
+}
+
+impl SttFailure {
+    fn new(engine: SttEngineType, message: String, recovered: bool) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Self { engine, message, recovered, timestamp }
+    }
+}
+
+/// What one turn produced: a transcript, a failure to report, or both when the local model recovered it
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SttOutcome {
+    pub chunk: Option<SttChunk>,
+    pub failure: Option<SttFailure>,
+}
+
+/// Lets an error message through at most once per `STT_ERROR_THROTTLE`
+#[derive(Default)]
+pub struct SttErrorThrottle {
+    last_sent: HashMap<String, Instant>,
+}
+
+impl SttErrorThrottle {
+    /// Returns true when `message` should be emitted at `now`
+    pub fn allow(&mut self, message: &str, now: Instant) -> bool {
+        if let Some(last) = self.last_sent.get(message) {
+            if now.duration_since(*last) < STT_ERROR_THROTTLE {
+                return false;
+            }
+        }
+        self.last_sent.insert(message.to_string(), now);
+        true
+    }
+}
+
+/// Why a cloud request failed, reduced to what the user can act on
+#[derive(Debug, Clone, PartialEq)]
+enum CloudError {
+    MissingKey,
+    Rejected,
+    Failed(String),
+}
+
+/// User-facing text for a failed cloud turn; the local-model note only follows a generic failure
+fn cloud_failure_message(engine: SttEngineType, err: &CloudError, recovered: bool) -> String {
+    let name = match engine {
+        SttEngineType::Groq => "Groq",
+        SttEngineType::Deepgram => "Deepgram",
+        SttEngineType::WhisperLocal => "Local Whisper",
+    };
+    match err {
+        CloudError::MissingKey => format!("Add your {name} API key in Settings → Keys to transcribe."),
+        CloudError::Rejected => format!("{name} rejected the API key."),
+        CloudError::Failed(reason) => {
+            let note = if recovered { " Used the local model instead." } else { "" };
+            format!("{name} transcription failed ({reason}).{note}")
+        }
+    }
+}
+
 /// Maps internal channel enumeration to user-facing speaker label
 pub fn channel_to_speaker(channel: Channel) -> &'static str {
     match channel {
@@ -113,6 +196,16 @@ pub fn channel_to_speaker(channel: Channel) -> &'static str {
 /// Generates a canonical turn ID from timestamp
 pub fn generate_turn_id(timestamp_ms: u64) -> String {
     format!("turn_{timestamp_ms}")
+}
+
+/// Sends a turn's transcript and failure to the frontend
+pub fn emit_outcome<R: Runtime>(app: &AppHandle<R>, outcome: &SttOutcome) {
+    if let Some(chunk) = &outcome.chunk {
+        let _ = app.emit(EVENT_STT_CHUNK, chunk);
+    }
+    if let Some(failure) = &outcome.failure {
+        let _ = app.emit(EVENT_STT_ERROR, failure);
+    }
 }
 
 /// Encodes 16kHz mono PCM float32 samples into a standard 16-bit signed PCM WAV buffer in-memory
@@ -216,131 +309,119 @@ impl SttDispatcher {
         self.local_whisper.load_model(model_name)
     }
 
-    /// Transcribes an audio chunk using the active STT engine and returns the SttChunk payload.
-    /// In offline mode or when cloud credentials are unconfigured, automatically falls back
-    /// to local whisper to guarantee zero dropped candidate/interviewer speech turns (AC-005).
-    pub fn transcribe_chunk(&self, chunk: &AudioChunk) -> Result<SttChunk, String> {
+    /// Transcribes one turn with the active engine. A turn yields a transcript, a failure, or neither
+    /// (silence); it never yields text that no engine produced.
+    pub fn transcribe_chunk(&self, chunk: &AudioChunk) -> SttOutcome {
         let engine = self.get_engine();
-        let speaker = channel_to_speaker(chunk.channel).to_string();
-        let turn_id = generate_turn_id(chunk.timestamp_ms);
-
-        let text = match engine {
-            SttEngineType::WhisperLocal => {
-                let res = self.local_whisper.transcribe(&chunk.samples, chunk.sample_rate)?;
-                res.text
-            }
-            SttEngineType::Groq => {
-                // Cloud Groq Whisper: Attempt cloud inference, fallback cleanly to local whisper
-                // if running offline, in test environments, or if API key is not configured.
-                match self.transcribe_groq_or_fallback(chunk) {
-                    Ok(text) => text,
-                    Err(e) => {
-                        eprintln!("[Sidekick STT] Groq transcription failed ({e}), falling back to local Whisper");
-                        self.local_whisper.transcribe(&chunk.samples, chunk.sample_rate)?.text
-                    }
+        let (text, failure) = match engine {
+            SttEngineType::WhisperLocal => match self.local_whisper.transcribe(&chunk.samples, chunk.sample_rate) {
+                Ok(res) => (res.text, None),
+                Err(e) => {
+                    let message = if self.local_whisper.has_model() {
+                        format!("Local transcription failed ({e}).")
+                    } else {
+                        NO_MODEL_MESSAGE.to_string()
+                    };
+                    (String::new(), Some(SttFailure::new(engine, message, false)))
                 }
-            }
-            SttEngineType::Deepgram => {
-                // Cloud Deepgram Nova-2: Attempt cloud inference, fallback cleanly to local whisper
-                match self.transcribe_deepgram_or_fallback(chunk) {
-                    Ok(text) => text,
-                    Err(e) => {
-                        eprintln!("[Sidekick STT] Deepgram transcription failed ({e}), falling back to local Whisper");
-                        self.local_whisper.transcribe(&chunk.samples, chunk.sample_rate)?.text
-                    }
-                }
-            }
+            },
+            cloud => self.transcribe_cloud(cloud, chunk),
         };
 
-        Ok(SttChunk {
-            id: turn_id,
-            speaker,
+        if let Some(failure) = &failure {
+            eprintln!("[Sidekick STT] {}", failure.message);
+        }
+
+        let stt_chunk = (!text.trim().is_empty()).then(|| SttChunk {
+            id: generate_turn_id(chunk.timestamp_ms),
+            speaker: channel_to_speaker(chunk.channel).to_string(),
             text,
             timestamp: chunk.timestamp_ms,
             is_final: true,
-        })
+        });
+        SttOutcome { chunk: stt_chunk, failure }
     }
 
-    /// Dispatches an audio chunk and emits `sidekick://stt_chunk` to frontend.
-    /// Skips non-speech or silent turns.
-    pub fn dispatch_chunk<R: Runtime>(&self, chunk: &AudioChunk, app: &AppHandle<R>) {
-        if !chunk.is_speech || chunk.samples.is_empty() {
-            return;
-        }
+    /// Cloud transcription with a local fallback. A turn counts as recovered only when a real model ran.
+    fn transcribe_cloud(&self, engine: SttEngineType, chunk: &AudioChunk) -> (String, Option<SttFailure>) {
+        let result = match cloud_api_key(engine) {
+            None => Err(CloudError::MissingKey),
+            Some(key) if engine == SttEngineType::Groq => {
+                call_groq_whisper_api(&key, &chunk.samples, chunk.sample_rate)
+            }
+            Some(key) => call_deepgram_api(&key, &chunk.samples, chunk.sample_rate),
+        };
+        let err = match result {
+            Ok(text) => return (text, None),
+            Err(err) => err,
+        };
 
-        match self.transcribe_chunk(chunk) {
-            Ok(stt_chunk) => {
-                if !stt_chunk.text.trim().is_empty() {
-                    let _ = app.emit(EVENT_STT_CHUNK, &stt_chunk);
-                }
-            }
-            Err(e) => {
-                eprintln!("[Sidekick STT] Chunk transcription error: {e}");
-            }
-        }
+        let local = if self.local_whisper.has_model() {
+            self.local_whisper.transcribe(&chunk.samples, chunk.sample_rate).ok()
+        } else {
+            None
+        };
+        let recovered = local.is_some();
+        let message = cloud_failure_message(engine, &err, recovered);
+        let failure = SttFailure::new(engine, message, recovered);
+        (local.map(|res| res.text).unwrap_or_default(), Some(failure))
     }
+}
 
-    /// Groq Whisper cloud transcription dispatcher with offline fallback
-    fn transcribe_groq_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
-        // Attempt Groq API if a key is saved in the config file
-        if let Ok(key) = crate::storage::config::retrieve_api_key("groq") {
-            let key = key.trim();
-            if !key.is_empty() {
-                match call_groq_whisper_api(key, &chunk.samples, chunk.sample_rate) {
-                    Ok(text) => return Ok(text),
-                    Err(e) => {
-                        eprintln!("[Sidekick STT] Groq cloud transcription warning: {e}. Falling back to local Whisper.");
-                    }
-                }
-            }
-        }
+/// Saved key for a cloud engine, if one is set
+fn cloud_api_key(engine: SttEngineType) -> Option<String> {
+    let provider = match engine {
+        SttEngineType::Groq => "groq",
+        SttEngineType::Deepgram => "deepgram",
+        SttEngineType::WhisperLocal => return None,
+    };
+    crate::storage::config::retrieve_api_key(provider)
+        .ok()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
 
-        // Fallback for offline or test environments
-        self.local_whisper
-            .transcribe(&chunk.samples, chunk.sample_rate)
-            .map(|r| r.text)
+/// One shared client: Groq's Cloudflare returns 403 to some default user agents
+fn cloud_client() -> Result<&'static reqwest::Client, CloudError> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
     }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(concat!("Sidekick/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| CloudError::Failed("HTTP client setup".to_string()))?;
+    Ok(CLIENT.get_or_init(|| client))
+}
 
-    /// Deepgram Nova-2 cloud transcription dispatcher with offline fallback
-    fn transcribe_deepgram_or_fallback(&self, chunk: &AudioChunk) -> Result<String, String> {
-        // Attempt Deepgram API if a token is saved in the config file
-        if let Ok(key) = crate::storage::config::retrieve_api_key("deepgram") {
-            let key = key.trim();
-            if !key.is_empty() {
-                match call_deepgram_api(key, &chunk.samples, chunk.sample_rate) {
-                    Ok(text) => return Ok(text),
-                    Err(e) => {
-                        eprintln!("[Sidekick STT] Deepgram cloud transcription warning: {e}. Falling back to local Whisper.");
-                    }
-                }
-            }
-        }
+fn http_failure(err: reqwest::Error) -> CloudError {
+    let reason = if err.is_timeout() { "timed out" } else { "network error" };
+    CloudError::Failed(reason.to_string())
+}
 
-        // Fallback for offline or test environments
-        self.local_whisper
-            .transcribe(&chunk.samples, chunk.sample_rate)
-            .map(|r| r.text)
+fn status_failure(status: reqwest::StatusCode) -> CloudError {
+    match status.as_u16() {
+        401 | 403 => CloudError::Rejected,
+        code => CloudError::Failed(format!("HTTP {code}")),
     }
 }
 
 /// Helper to call Groq Whisper API for low-latency cloud transcription
-fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, CloudError> {
     let wav_bytes = encode_wav_pcm16(samples, sample_rate);
     let part = reqwest::multipart::Part::bytes(wav_bytes)
         .file_name("speech.wav")
         .mime_str("audio/wav")
-        .map_err(|e| format!("Failed to create multipart audio part: {e}"))?;
+        .map_err(|_| CloudError::Failed("bad audio part".to_string()))?;
 
     let form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("model", "whisper-large-v3-turbo")
-        .text("response_format", "json");
+        .text("response_format", "json")
+        .text("language", "en");
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to create reqwest client: {e}"))?;
-
+    let client = cloud_client()?;
     let response = tauri::async_runtime::block_on(async {
         client
             .post("https://api.groq.com/openai/v1/audio/transcriptions")
@@ -348,13 +429,11 @@ fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Re
             .multipart(form)
             .send()
             .await
-    }).map_err(|e| format!("Groq HTTP error: {e}"))?;
+    })
+    .map_err(http_failure)?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = tauri::async_runtime::block_on(async { response.text().await })
-            .unwrap_or_default();
-        return Err(format!("Groq API error ({status}): {body}"));
+        return Err(status_failure(response.status()));
     }
 
     #[derive(Deserialize)]
@@ -364,18 +443,16 @@ fn call_groq_whisper_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Re
 
     let parsed: GroqResponse = tauri::async_runtime::block_on(async {
         response.json().await
-    }).map_err(|e| format!("Failed to parse Groq response JSON: {e}"))?;
+    })
+    .map_err(|_| CloudError::Failed("bad response".to_string()))?;
 
     Ok(parsed.text.trim().to_string())
 }
 
 /// Helper to call Deepgram Nova-2 API for cloud speech transcription
-fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result<String, CloudError> {
     let wav_bytes = encode_wav_pcm16(samples, sample_rate);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to create reqwest client: {e}"))?;
+    let client = cloud_client()?;
 
     let response = tauri::async_runtime::block_on(async {
         client
@@ -385,13 +462,11 @@ fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result
             .body(wav_bytes)
             .send()
             .await
-    }).map_err(|e| format!("Deepgram HTTP error: {e}"))?;
+    })
+    .map_err(http_failure)?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = tauri::async_runtime::block_on(async { response.text().await })
-            .unwrap_or_default();
-        return Err(format!("Deepgram API error ({status}): {body}"));
+        return Err(status_failure(response.status()));
     }
 
     #[derive(Deserialize)]
@@ -413,7 +488,8 @@ fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result
 
     let parsed: DeepgramResponse = tauri::async_runtime::block_on(async {
         response.json().await
-    }).map_err(|e| format!("Failed to parse Deepgram response: {e}"))?;
+    })
+    .map_err(|_| CloudError::Failed("bad response".to_string()))?;
 
     let transcript = parsed
         .results
@@ -429,7 +505,7 @@ fn call_deepgram_api(api_key: &str, samples: &[f32], sample_rate: u32) -> Result
 /// Item passed through the asynchronous STT worker queue
 pub struct SttQueueItem {
     pub chunk: AudioChunk,
-    pub emit_fn: Box<dyn FnOnce(&SttChunk) + Send>,
+    pub emit_fn: Box<dyn FnOnce(SttOutcome) + Send>,
 }
 
 /// Background worker running STT inference asynchronously to ensure
@@ -448,15 +524,23 @@ impl AsyncSttWorker {
         let handle = thread::Builder::new()
             .name("sidekick-stt-worker".to_string())
             .spawn(move || {
+                let mut throttle = SttErrorThrottle::default();
                 while let Ok(item) = receiver.recv() {
                     if panicked_clone.load(Ordering::SeqCst) {
                         // Immediately drain without executing during panic purge
                         continue;
                     }
-                    if let Ok(stt_chunk) = dispatcher.transcribe_chunk(&item.chunk) {
-                        if !stt_chunk.text.trim().is_empty() && !panicked_clone.load(Ordering::SeqCst) {
-                            (item.emit_fn)(&stt_chunk);
-                        }
+                    let mut outcome = dispatcher.transcribe_chunk(&item.chunk);
+                    let allowed = outcome
+                        .failure
+                        .as_ref()
+                        .is_none_or(|f| throttle.allow(&f.message, Instant::now()));
+                    if !allowed {
+                        outcome.failure = None;
+                    }
+                    let has_output = outcome.chunk.is_some() || outcome.failure.is_some();
+                    if has_output && !panicked_clone.load(Ordering::SeqCst) {
+                        (item.emit_fn)(outcome);
                     }
                 }
             })
@@ -472,7 +556,7 @@ impl AsyncSttWorker {
     /// Non-blocking enqueue from audio callback threads. Returns immediately (< 0.01ms).
     pub fn try_enqueue<F>(&self, chunk: AudioChunk, emit_fn: F) -> bool
     where
-        F: FnOnce(&SttChunk) + Send + 'static,
+        F: FnOnce(SttOutcome) + Send + 'static,
     {
         if self.is_panicked.load(Ordering::SeqCst) {
             return false;
@@ -495,6 +579,18 @@ impl AsyncSttWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn speech_chunk(channel: Channel, timestamp_ms: u64) -> AudioChunk {
+        AudioChunk {
+            channel,
+            samples: vec![0.1f32; 16000],
+            sample_rate: 16000,
+            timestamp_ms,
+            duration_secs: 1.0,
+            rms_energy: 0.1,
+            is_speech: true,
+        }
+    }
 
     #[test]
     fn test_stt_engine_type_parsing() {
@@ -552,17 +648,9 @@ mod tests {
     #[test]
     fn test_stt_dispatcher_routing_interviewer() {
         let dispatcher = SttDispatcher::new_mock(Some("Can you explain how consistent hashing works?"));
-        let chunk = AudioChunk {
-            channel: Channel::Interviewer,
-            samples: vec![0.1f32; 16000],
-            sample_rate: 16000,
-            timestamp_ms: 1729000000000,
-            duration_secs: 1.0,
-            rms_energy: 0.1,
-            is_speech: true,
-        };
+        let chunk = speech_chunk(Channel::Interviewer, 1729000000000);
 
-        let result = dispatcher.transcribe_chunk(&chunk).expect("transcription succeeded");
+        let result = dispatcher.transcribe_chunk(&chunk).chunk.expect("turn has text");
         assert_eq!(result.id, "turn_1729000000000");
         assert_eq!(result.speaker, "interviewer");
         assert_eq!(result.text, "Can you explain how consistent hashing works?");
@@ -572,21 +660,75 @@ mod tests {
     #[test]
     fn test_stt_dispatcher_routing_candidate() {
         let dispatcher = SttDispatcher::new_mock(Some("Sure, consistent hashing minimizes key remapping."));
-        let chunk = AudioChunk {
-            channel: Channel::Candidate,
-            samples: vec![0.1f32; 16000],
-            sample_rate: 16000,
-            timestamp_ms: 1729000050000,
-            duration_secs: 1.0,
-            rms_energy: 0.1,
-            is_speech: true,
-        };
+        let chunk = speech_chunk(Channel::Candidate, 1729000050000);
 
-        let result = dispatcher.transcribe_chunk(&chunk).expect("transcription succeeded");
+        let result = dispatcher.transcribe_chunk(&chunk).chunk.expect("turn has text");
         assert_eq!(result.id, "turn_1729000050000");
         assert_eq!(result.speaker, "candidate");
         assert_eq!(result.text, "Sure, consistent hashing minimizes key remapping.");
         assert!(result.is_final);
+    }
+
+    #[test]
+    fn test_turn_without_model_yields_error_not_text() {
+        // A model path that does not exist forces the no-model path, whatever is installed on this machine
+        let config = WhisperConfig {
+            model_path: Some(PathBuf::from("/nonexistent/sidekick-test-model.bin")),
+            ..WhisperConfig::default()
+        };
+        let dispatcher = SttDispatcher::new(SttEngineType::WhisperLocal, config);
+
+        let outcome = dispatcher.transcribe_chunk(&speech_chunk(Channel::Candidate, 1729000000000));
+        assert_eq!(outcome.chunk, None, "no model must not produce transcript text");
+        let failure = outcome.failure.expect("missing model is reported");
+        assert_eq!(failure.message, NO_MODEL_MESSAGE);
+        assert_eq!(failure.engine, SttEngineType::WhisperLocal);
+        assert!(!failure.recovered);
+    }
+
+    #[test]
+    fn test_cloud_failure_messages() {
+        use CloudError::*;
+        assert_eq!(
+            cloud_failure_message(SttEngineType::Groq, &MissingKey, false),
+            "Add your Groq API key in Settings → Keys to transcribe."
+        );
+        assert_eq!(
+            cloud_failure_message(SttEngineType::Deepgram, &MissingKey, false),
+            "Add your Deepgram API key in Settings → Keys to transcribe."
+        );
+        assert_eq!(
+            cloud_failure_message(SttEngineType::Groq, &Rejected, true),
+            "Groq rejected the API key."
+        );
+        assert_eq!(
+            cloud_failure_message(SttEngineType::Groq, &Failed("HTTP 500".into()), false),
+            "Groq transcription failed (HTTP 500)."
+        );
+        assert_eq!(
+            cloud_failure_message(SttEngineType::Groq, &Failed("timed out".into()), true),
+            "Groq transcription failed (timed out). Used the local model instead."
+        );
+    }
+
+    #[test]
+    fn test_stt_error_throttle_repeats_once_per_window() {
+        let mut throttle = SttErrorThrottle::default();
+        let t0 = Instant::now();
+        assert!(throttle.allow(NO_MODEL_MESSAGE, t0));
+        assert!(!throttle.allow(NO_MODEL_MESSAGE, t0 + Duration::from_secs(9)));
+        assert!(throttle.allow("another message", t0 + Duration::from_secs(9)));
+        assert!(throttle.allow(NO_MODEL_MESSAGE, t0 + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_stt_error_payload_contract() {
+        let failure = SttFailure::new(SttEngineType::Groq, "Groq rejected the API key.".into(), true);
+        let json = serde_json::to_value(&failure).unwrap();
+        assert_eq!(json["engine"], "groq");
+        assert_eq!(json["message"], "Groq rejected the API key.");
+        assert_eq!(json["recovered"], true);
+        assert!(json["timestamp"].as_u64().unwrap() > 0);
     }
 
     #[test]
@@ -631,39 +773,20 @@ mod tests {
         let is_panicked = Arc::new(AtomicBool::new(false));
         let worker = AsyncSttWorker::new(dispatcher, is_panicked.clone());
 
-        let chunk = AudioChunk {
-            channel: Channel::Interviewer,
-            samples: vec![0.1f32; 16000],
-            sample_rate: 16000,
-            timestamp_ms: 1729000000000,
-            duration_secs: 1.0,
-            rms_energy: 0.1,
-            is_speech: true,
-        };
-
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let enqueued = worker.try_enqueue(chunk, move |stt_chunk| {
-            let _ = done_tx.send(stt_chunk.clone());
+        let enqueued = worker.try_enqueue(speech_chunk(Channel::Interviewer, 1729000000000), move |outcome| {
+            let _ = done_tx.send(outcome.chunk.map(|c| c.text));
         });
         assert!(enqueued, "Chunk should be successfully enqueued to worker");
 
         let received = done_rx
-            .recv_timeout(std::time::Duration::from_millis(500))
+            .recv_timeout(Duration::from_millis(500))
             .expect("Worker processed turn");
-        assert_eq!(received.text, "Async processing test");
+        assert_eq!(received.as_deref(), Some("Async processing test"));
 
         // When panicked, enqueue is rejected immediately
         is_panicked.store(true, Ordering::SeqCst);
-        let chunk2 = AudioChunk {
-            channel: Channel::Candidate,
-            samples: vec![0.1f32; 16000],
-            sample_rate: 16000,
-            timestamp_ms: 1729000001000,
-            duration_secs: 1.0,
-            rms_energy: 0.1,
-            is_speech: true,
-        };
-        let rejected = worker.try_enqueue(chunk2, |_| {});
+        let rejected = worker.try_enqueue(speech_chunk(Channel::Candidate, 1729000001000), |_| {});
         assert!(!rejected, "Must reject turns immediately during panic");
     }
 }

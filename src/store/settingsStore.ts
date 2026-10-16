@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { safeInvoke } from "../lib/ipc";
+import { invokeInTauri, safeInvoke } from "../lib/ipc";
+import { getDefaultModelForProvider } from "../services/ai/dispatcher";
 
 export type ApiProvider =
   | "openrouter"
@@ -83,12 +84,22 @@ const defaultState = {
     deepgram: "",
   },
   selectedProvider: "openrouter" as ApiProvider,
-  selectedModel: "anthropic/claude-3.5-sonnet",
-  evaluatorModel: "groq/llama-3.3-70b-versatile",
+  selectedModel: "anthropic/claude-haiku-5.5",
+  evaluatorModel: "qwen/qwen3.8-27b",
   profile: defaultProfile,
   sttMode: "whisper_local" as SttMode,
   isSettingsOpen: false,
 };
+
+// Old defaults that were replaced; migrated once when persist version goes 0 -> 1
+const STALE_SELECTED_MODELS = [
+  "anthropic/claude-3.5-sonnet",
+  "claude-3-5-sonnet-20241022",
+  "gpt-4o",
+  "gemini-2.0-flash",
+  "llama-3.3-70b-versatile",
+];
+const STALE_EVALUATOR_MODELS = ["groq/llama-3.3-70b-versatile", "llama-3.3-70b-versatile"];
 
 // Settings live in ~/.config/sidekick/config.json (via load_settings / save_settings).
 // Outside Tauri this is plain localStorage, kept synchronous so tests hydrate immediately.
@@ -138,14 +149,14 @@ export const useSettingsStore = create<SettingsState>()(
             [provider]: trimmed,
           },
         }));
-        await safeInvoke("store_api_key", { provider, key: trimmed });
+        await invokeInTauri("store_api_key", { provider, key: trimmed });
       },
 
       saveAllApiKeysToBackend: async () => {
         const keys = get().apiKeys;
         for (const [provider, key] of Object.entries(keys)) {
           // Always propagate key to backend, including empty/cleared strings (""), so deleted keys are wiped
-          await safeInvoke("store_api_key", { provider, key: (key || "").trim() });
+          await invokeInTauri("store_api_key", { provider, key: (key || "").trim() });
         }
       },
 
@@ -168,7 +179,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
 
-      setSelectedProvider: (provider) => set({ selectedProvider: provider }),
+      // A model id from one provider fails on another, so switching provider resets the model
+      setSelectedProvider: (provider) =>
+        set({ selectedProvider: provider, selectedModel: getDefaultModelForProvider(provider) }),
 
       setSelectedModel: (model) => set({ selectedModel: model }),
 
@@ -216,6 +229,19 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "sidekick-settings",
+      version: 1,
+      migrate: (persisted, fromVersion) => {
+        const state = (persisted ?? {}) as Partial<SettingsState>;
+        if (fromVersion < 1) {
+          if (STALE_EVALUATOR_MODELS.includes(state.evaluatorModel ?? "")) {
+            state.evaluatorModel = defaultState.evaluatorModel;
+          }
+          if (STALE_SELECTED_MODELS.includes(state.selectedModel ?? "")) {
+            state.selectedModel = getDefaultModelForProvider(state.selectedProvider ?? "openrouter");
+          }
+        }
+        return state as SettingsState;
+      },
       storage: createJSONStorage(() => configFileStorage),
       partialize: (state) => {
         // Keys are excluded here; they are saved separately via store_api_key.

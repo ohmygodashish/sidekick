@@ -84,6 +84,7 @@ export const ApiKeyInputs: React.FC = () => {
   const [checks, setChecks] = useState<Partial<Record<ApiProvider, KeyCheck>>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
   const savedTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => () => window.clearTimeout(savedTimer.current), []);
@@ -108,11 +109,16 @@ export const ApiKeyInputs: React.FC = () => {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveFailed(false);
     try {
       await saveAllApiKeysToBackend();
       setSaved(true);
       window.clearTimeout(savedTimer.current);
       savedTimer.current = window.setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.warn("[Sidekick] saving API keys failed:", err);
+      setSaved(false);
+      setSaveFailed(true);
     } finally {
       setSaving(false);
     }
@@ -239,6 +245,11 @@ export const ApiKeyInputs: React.FC = () => {
         {saved && (
           <span role="status" className="sk-meta text-emerald-400">
             Saved
+          </span>
+        )}
+        {saveFailed && (
+          <span role="status" className="sk-meta text-red-300">
+            Couldn&apos;t save keys. Try again.
           </span>
         )}
         <button type="button" onClick={handleSave} disabled={saving} className="sk-btn-primary">
